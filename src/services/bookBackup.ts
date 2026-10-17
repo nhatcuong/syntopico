@@ -96,18 +96,16 @@ export async function importBook(): Promise<ImportResult> {
     status = 'merged';
   } else {
     bookId = insertBook(
-      backup.book.googleBooksId
-        ? {
-            googleBooksId: backup.book.googleBooksId,
-            title: backup.book.title,
-            author: backup.book.author,
-            coverUrl: backup.book.coverUrl,
-            isbn: backup.book.isbn,
-            description: backup.book.description,
-            pageCount: backup.book.pageCount,
-          }
-        : null,
-      { title: backup.book.title, author: backup.book.author, chapter: null, note: '' }
+      {
+        googleBooksId: backup.book.googleBooksId,
+        title: backup.book.title,
+        author: backup.book.author,
+        coverUrl: backup.book.coverUrl,
+        isbn: backup.book.isbn,
+        description: backup.book.description,
+        pageCount: backup.book.pageCount,
+      },
+      { title: backup.book.title, author: backup.book.author, chapter: null, blocks: [] }
     );
     status = 'created';
   }

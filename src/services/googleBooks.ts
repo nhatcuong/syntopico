@@ -1,5 +1,7 @@
+import { fetchOpenLibraryMetadata } from './openLibrary';
+
 export type BookMetadata = {
-  googleBooksId: string;
+  googleBooksId: string | null;
   title: string;
   author: string | null;
   coverUrl: string | null;
@@ -18,7 +20,14 @@ export class GoogleBooksError extends Error {
 const GOOGLE_BOOKS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY;
 
 async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
-  const res = await fetch(url);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
   if ((res.status === 429 || res.status === 503) && retries > 0) {
     await new Promise(r => setTimeout(r, 2000));
     return fetchWithRetry(url, retries - 1);
@@ -88,7 +97,7 @@ function pickBest(items: any[], queryTitle: string): any {
   , items[0]);
 }
 
-export async function fetchBookMetadata(
+async function fetchGoogleBookMetadata(
   title: string,
   author: string | null
 ): Promise<BookMetadata | null> {
@@ -108,4 +117,51 @@ export async function fetchBookMetadata(
   if (items.length === 0) return null;
 
   return parseItem(pickBest(items, title), title);
+}
+
+// Keep the existing entry point so every capture path gets the same fallback.
+export async function fetchBookMetadata(
+  title: string,
+  author: string | null,
+): Promise<BookMetadata | null> {
+  let google: BookMetadata | null = null;
+  let googleError: unknown;
+  try {
+    google = await fetchGoogleBookMetadata(title, author);
+  } catch (error) {
+    googleError = error;
+  }
+  const complete = google && google.author && google.coverUrl && google.isbn &&
+    google.description && google.pageCount && google.pageCount > 0;
+  if (complete) return google;
+
+  try {
+    const fallback = await fetchOpenLibraryMetadata(title, google?.author ?? author, google?.isbn);
+    if (!fallback) {
+      if (googleError) throw googleError;
+      return google;
+    }
+    if (!google) return fallback;
+    // Only merge edition-specific fields when the ISBN agrees. Otherwise choose
+    // one whole record, keeping cover, ISBN and page count from the same edition.
+    if (google.isbn && google.isbn === fallback.isbn) {
+      return {
+        ...google,
+        author: google.author ?? fallback.author,
+        coverUrl: google.coverUrl ?? fallback.coverUrl,
+        description: google.description ?? fallback.description,
+        pageCount: google.pageCount && google.pageCount > 0 ? google.pageCount : fallback.pageCount,
+      };
+    }
+    const completeness = (book: BookMetadata) =>
+      [book.author, book.coverUrl, book.isbn, book.description, book.pageCount && book.pageCount > 0]
+        .filter(Boolean).length;
+    return completeness(fallback) > completeness(google) ? fallback : google;
+  } catch (error) {
+    if (google) return google;
+    // Existing callers recognize this error class and display its message.
+    throw new GoogleBooksError(googleError
+      ? 'Could not retrieve book metadata from Google Books or Open Library. Please try again.'
+      : 'Open Library lookup failed. Please try again.');
+  }
 }

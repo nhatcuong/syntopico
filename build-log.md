@@ -1,5 +1,22 @@
 # Build Log
 
+## Session 22 — 2026-10-16
+
+### What we did
+- Investigated intermittent Google Books failures: three direct live queries using the configured local key returned HTTP 503, `backendFailed`, service temporarily unavailable. Confirmed separate code paths for empty search results and incomplete metadata; existing locally matched books skip lookup thereafter.
+- Implemented automatic Open Library fallback for Google errors, empty searches and incomplete records. Added bounded request timeouts, serialized Open Library requests at one per second, title/author matching with title-only retrieval fallback, and edition/work detail fetching. Merge edition-specific fields only for the same ISBN; otherwise select a whole record. Made Google IDs nullable and preserved provider-independent metadata on backup import.
+- Validation: 29 service tests pass, including 17 new regression tests. Full suite has five existing recording-hook failures; TypeScript still reports existing Expo module configuration and legacy VoiceCaptureScreen/identifyBook errors.
+- Booted the iPhone 17 Pro simulator on iOS 26.4 and used an isolated temporary Expo project with copies of the actual services. Verified forced Google 503 retries → live Open Library for Dune, partial Google → live fallback, SQLite book/note round trip, native cover rendering, empty results and handled combined outages. Temporary test records were removed. This was a metadata integration test, not microphone/transcription verification.
+- Located `bstf` in ~/.zshrc and ran it: `eas build --platform ios --profile production --auto-submit`. EAS uploaded production 1.0.0 (13), build 8be60f10-a687-4bab-896f-8571a66b9381, submission a3609877-65b4-46fc-99d9-8e8206f162b1. Apple initially reported a missing/expired agreement during TestFlight group setup. Owner subsequently confirmed publication; publication was not independently rechecked.
+- Prepared the Open Library PR separately from unrelated local HomeScreen, seeding and blog changes; it is stacked on voice-max-duration / PR #27 because earlier PRs remain open.
+- Wrote the next-session Android implementation plan, risks and emulator-first verification gates in `docs/android-plan.md`.
+
+### Decisions / next session
+- Shelved the proposed save-failed-capture-without-metadata recovery flow and retry folder/menu/screen. Do not build them now; current failure behavior remains. Existing empty-result behavior is unchanged.
+- Android is next. Owner has no Android phone: develop and verify on Android Emulator; friends may provide optional hardware testing. Prefer a standalone EAS preview APK for the first friends beta, with no Metro requirement; Play Store work is deferred.
+- Resume by opening `docs/android-plan.md`. Stop at each integration gate until verified end-to-end in the emulator; do not equate emulator coverage with physical-device verification.
+- Keep using the existing canonical `build-log.md` (hyphenated filename), rather than starting a second `build_log.md`.
+
 ## Session 21 — 2026-09-12
 
 ### What we did
