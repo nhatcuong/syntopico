@@ -15,9 +15,9 @@ import { getBooksByLastSession, BookRow } from '../db/database';
 import { importBook } from '../services/bookBackup';
 import { useRecording } from '../hooks/useRecording';
 import { RootStackParamList } from '../navigation/types';
-import Fab from '../components/Fab';
-import RecordingOverlay from '../components/RecordingOverlay';
+import CentralInfoDisplay from '../components/CentralInfoDisplay';
 import Wordmark from '../components/Wordmark';
+import { useSetFabConfig } from '../contexts/FabController';
 import { NAVY, ACCENT, MUTED, FAINT, PAPER, SURFACE, HAIRLINE, CARD_SHADOW } from '../tokens';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
@@ -72,6 +72,21 @@ export default function HomeScreen({ navigation }: Props) {
   const isProcessing = state === 'transcribing' || state === 'extracting';
   const showOverlay  = isRecording || isProcessing;
 
+  // Registers this screen's FAB behavior with the single, app-wide FAB —
+  // only takes effect while Home is the focused screen. Re-runs whenever
+  // the recording state changes (not just on focus/blur), since the
+  // memoized callback's identity changes with its dependencies.
+  const setFabConfig = useSetFabConfig();
+  useFocusEffect(useCallback(() => {
+    setFabConfig({
+      fabState: isRecording ? 'recording' : isProcessing ? 'processing' : 'idle',
+      onPress: isRecording ? stop : start,
+      overlay: showOverlay
+        ? { state: state as 'recording' | 'transcribing' | 'extracting', durationMs, customLabel: 'Record your new reading note' }
+        : null,
+    });
+  }, [isRecording, isProcessing, showOverlay, state, durationMs, start, stop]));
+
   function formatDate(dateStr: string) {
     return new Date(dateStr).toLocaleDateString('en-US', {
       month: 'short', day: 'numeric', year: 'numeric',
@@ -108,13 +123,11 @@ export default function HomeScreen({ navigation }: Props) {
 
       {/* Book list */}
       {books.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>What are you reading?</Text>
-          <View style={styles.emptyDivider} />
+        <CentralInfoDisplay title="What are you reading?">
           <Text style={styles.emptySubtitle}>
             Say the book, the chapter, and what's on your mind, like you're talking to a friend!
           </Text>
-        </View>
+        </CentralInfoDisplay>
       ) : (
         <FlatList
           data={books}
@@ -157,23 +170,6 @@ export default function HomeScreen({ navigation }: Props) {
           }}
         />
       )}
-
-      {/* Recording overlay */}
-      {showOverlay && (
-        <RecordingOverlay
-          state={state as 'recording' | 'transcribing' | 'extracting'}
-          durationMs={durationMs}
-          customLabel="Record your new reading note"
-        />
-      )}
-
-      {/* FAB */}
-      <View style={styles.fabContainer}>
-        <Fab
-          fabState={isRecording ? 'recording' : isProcessing ? 'processing' : 'idle'}
-          onPress={isRecording ? stop : start}
-        />
-      </View>
 
       {/* Menu */}
       {menuOpen && (
@@ -304,35 +300,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: FAINT,
   },
-  emptyState: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingBottom: 100,
-    paddingHorizontal: 64,
-  },
-  emptyTitle: {
-    fontFamily: 'Newsreader_500Medium',
-    fontSize: 22,
-    color: NAVY,
-    textAlign: 'center',
-    marginBottom: 12,
-  },
-  emptyDivider: {
-    width: 56,
-    height: 1,
-    backgroundColor: 'rgba(27,42,74,0.3)',
-    marginBottom: 20,
-  },
   emptySubtitle: {
     fontSize: 19,
     color: MUTED,
     textAlign: 'center',
     lineHeight: 26,
-  },
-  fabContainer: {
-    position: 'absolute',
-    bottom: 30,
-    alignSelf: 'center',
   },
 });

@@ -21,9 +21,8 @@ import { fetchBookMetadata } from '../services/googleBooks';
 import { findMatchingBook } from '../services/matchBook';
 import { RootStackParamList } from '../navigation/types';
 import NoteBlocksRenderer from '../components/NoteBlocksRenderer';
-import Fab from '../components/Fab';
-import RecordingOverlay from '../components/RecordingOverlay';
 import { NAVY, ACCENT, MUTED, FAINT, DESTRUCTIVE, BODY, PAPER, SURFACE, HAIRLINE, CARD_SHADOW } from '../tokens';
+import { useSetFabConfig } from '../contexts/FabController';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Book'>;
 
@@ -177,6 +176,39 @@ export default function BookScreen({ navigation, route }: Props) {
   const amendIsActive  = amendCapture.state !== 'idle';
   const wrongBookIsActive = wrongBookCapture.state !== 'idle';
 
+  // Registers this screen's FAB behavior with the single, app-wide FAB —
+  // only takes effect while this screen is focused. Precedence (wrong-book
+  // > amend > main note) matches which capture the main FAB should control
+  // when more than one could technically be active — the "Wrong book?" and
+  // "Amend" links (below) start their own capture directly; the FAB is only
+  // ever the *stop* control for whichever of those is in flight, or the
+  // start/stop control for a plain new note otherwise.
+  const setFabConfig = useSetFabConfig();
+  useFocusEffect(useCallback(() => {
+    setFabConfig({
+      fabState:
+        wrongBookCapture.state === 'recording'    ? 'recording'  :
+        wrongBookCapture.state === 'transcribing' ? 'processing' :
+        amendCapture.state === 'recording'        ? 'recording'  :
+        amendCapture.state === 'transcribing'     ? 'processing' :
+        isRecording ? 'recording' : isProcessing  ? 'processing' : 'idle',
+      onPress:
+        wrongBookCapture.state === 'recording' ? wrongBookCapture.stop :
+        amendCapture.state === 'recording'     ? amendCapture.stop     :
+        isRecording ? stop : start,
+      overlay:
+        wrongBookIsActive ? { state: wrongBookCapture.state as 'recording' | 'transcribing', durationMs: wrongBookCapture.durationMs, customLabel: 'What book was that?' } :
+        amendIsActive     ? { state: amendCapture.state as 'recording' | 'transcribing', durationMs: amendCapture.durationMs, customLabel: 'Amend a reading note' } :
+        showOverlay       ? { state: state as 'recording' | 'transcribing' | 'extracting', durationMs, customLabel: 'Record your new reading note' } :
+        null,
+    });
+  }, [
+    isRecording, isProcessing, showOverlay, state, durationMs, start, stop,
+    amendCapture.state, amendCapture.durationMs, amendCapture.stop,
+    wrongBookCapture.state, wrongBookCapture.durationMs, wrongBookCapture.stop,
+    amendIsActive, wrongBookIsActive,
+  ]));
+
   async function handleExport() {
     setMenuOpen(false);
     try {
@@ -274,7 +306,7 @@ export default function BookScreen({ navigation, route }: Props) {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
     <View style={styles.content}>
       {/* Header — one always-opaque, full-width row, fixed at its final
           (compact-cover-sized) height from the very start. It never grows —
@@ -324,6 +356,7 @@ export default function BookScreen({ navigation, route }: Props) {
 
       <Animated.ScrollView
         ref={scrollViewRef}
+        style={styles.scrollView}
         contentContainerStyle={styles.scroll}
         onScroll={Animated.event(
           [{ nativeEvent: { contentOffset: { y: scrollY } } }],
@@ -412,6 +445,10 @@ export default function BookScreen({ navigation, route }: Props) {
           })
         )}
 
+        {/* Clears the FAB, which (like this screen's `content`, now that
+            SafeAreaView no longer reserves the bottom edge here) is
+            positioned relative to the true screen bottom, not the safe-area
+            inset — see GlobalRecordingUI. */}
         <View style={{ height: 130 }} />
       </Animated.ScrollView>
 
@@ -447,29 +484,6 @@ export default function BookScreen({ navigation, route }: Props) {
         )}
       </Animated.View>
 
-      {/* Recording overlay */}
-      {showOverlay && (
-        <RecordingOverlay
-          state={state as 'recording' | 'transcribing' | 'extracting'}
-          durationMs={durationMs}
-          customLabel="Record your new reading note"
-        />
-      )}
-      {amendIsActive && (
-        <RecordingOverlay
-          state={amendCapture.state as 'recording' | 'transcribing'}
-          durationMs={amendCapture.durationMs}
-          customLabel="Amend a reading note"
-        />
-      )}
-      {wrongBookIsActive && (
-        <RecordingOverlay
-          state={wrongBookCapture.state as 'recording' | 'transcribing'}
-          durationMs={wrongBookCapture.durationMs}
-          customLabel="What book was that?"
-        />
-      )}
-
       {/* Menu */}
       {menuOpen && (
         <View style={[StyleSheet.absoluteFillObject, { zIndex: 999 }]}>
@@ -486,29 +500,6 @@ export default function BookScreen({ navigation, route }: Props) {
         </View>
       )}
     </View>
-
-      {/* FAB — deliberately a direct child of SafeAreaView, not of
-          `content`: `content`'s box excludes the bottom safe-area inset
-          (needed so heroOverlay gets the top inset), which would push the
-          FAB up by that inset's height too. Home screen's FAB sits at the
-          same true distance from the bottom edge, so this keeps both
-          screens visually consistent. */}
-      <View style={styles.fabContainer}>
-        <Fab
-          fabState={
-            wrongBookCapture.state === 'recording'    ? 'recording'  :
-            wrongBookCapture.state === 'transcribing' ? 'processing' :
-            amendCapture.state === 'recording'        ? 'recording'  :
-            amendCapture.state === 'transcribing'     ? 'processing' :
-            isRecording ? 'recording' : isProcessing  ? 'processing' : 'idle'
-          }
-          onPress={
-            wrongBookCapture.state === 'recording' ? wrongBookCapture.stop :
-            amendCapture.state === 'recording'     ? amendCapture.stop     :
-            isRecording ? stop : start
-          }
-        />
-      </View>
     </SafeAreaView>
   );
 }
@@ -668,6 +659,13 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: HAIRLINE,
   },
+  // Without an explicit style (flex:1), ScrollView sizes to its own content
+  // instead of filling the remaining space in `content` below headerRow —
+  // leaving a gap, the same background color as everywhere else, that the
+  // list's own scrolling never reaches into.
+  scrollView: {
+    flex: 1,
+  },
   scroll: {
     paddingHorizontal: 20,
     // No paddingTop: headerRow (COMPACT_HEADER_HEIGHT) owns the entire fixed
@@ -823,10 +821,5 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: ACCENT,
     opacity: 0.7,
-  },
-  fabContainer: {
-    position: 'absolute',
-    bottom: 30,
-    alignSelf: 'center',
   },
 });

@@ -1,7 +1,8 @@
 import { useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, Animated, ActivityIndicator } from 'react-native';
 import { BlurView } from 'expo-blur';
-import { NAVY, ACCENT, MUTED } from '../tokens';
+import { NAVY, ACCENT } from '../tokens';
+import CentralInfoDisplay from './CentralInfoDisplay';
 
 type OverlayState = 'recording' | 'transcribing' | 'extracting';
 
@@ -74,20 +75,17 @@ export default function RecordingOverlay({ state, durationMs, customLabel }: Pro
   return (
     <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFillObject}>
       <View style={styles.tint} />
-      <View style={styles.center}>
-        {isRecording ? (
-          <>
-            <Text style={styles.labelRegular}>{customLabel ?? 'Record your new reading note'}</Text>
-            <Text style={styles.timer}>{mm}:{ss}</Text>
-            <Waveform />
-          </>
-        ) : (
-          <>
-            <ActivityIndicator size="small" color={NAVY} />
-            <Text style={styles.processingLabel}>{processingLabel}</Text>
-          </>
-        )}
-      </View>
+      {isRecording ? (
+        <CentralInfoDisplay title={customLabel ?? 'Record your new reading note'} paddingHorizontal={32}>
+          <Text style={styles.timer}>{mm}:{ss}</Text>
+          <Waveform />
+        </CentralInfoDisplay>
+      ) : (
+        <View style={styles.center}>
+          <ActivityIndicator size="small" color={NAVY} style={styles.processingSpinner} />
+          <Text style={styles.processingLabel}>{processingLabel}</Text>
+        </View>
+      )}
     </BlurView>
   );
 }
@@ -101,24 +99,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 18,
     paddingHorizontal: 32,
-  },
-  label: {
-    textAlign: 'center',
-    lineHeight: 32,
-  },
-  labelRegular: {
-    fontFamily: 'Newsreader_500Medium',
-    fontSize: 22,
-    color: NAVY,
-    textAlign: 'center',
-    lineHeight: 32,
-  },
-  labelItalic: {
-    fontFamily: 'Newsreader_500Medium_Italic',
-    fontSize: 22,
-    color: NAVY,
   },
   timer: {
     fontSize: 56,
@@ -126,6 +107,10 @@ const styles = StyleSheet.create({
     color: NAVY,
     fontVariant: ['tabular-nums'],
     letterSpacing: -1,
+    marginBottom: 18,
+  },
+  processingSpinner: {
+    marginBottom: 18,
   },
   processingLabel: {
     fontFamily: 'Newsreader_400Regular_Italic',

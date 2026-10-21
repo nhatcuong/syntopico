@@ -18,6 +18,8 @@ import { initDatabase } from './src/db/database';
 import HomeScreen from './src/screens/HomeScreen';
 import BookScreen from './src/screens/BookScreen';
 import { RootStackParamList } from './src/navigation/types';
+import { FabControllerProvider } from './src/contexts/FabController';
+import GlobalRecordingUI from './src/components/GlobalRecordingUI';
 
 Sentry.init({
   dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
@@ -45,12 +47,18 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="Home" component={HomeScreen} />
-          <Stack.Screen name="Book" component={BookScreen} />
-        </Stack.Navigator>
-      </NavigationContainer>
+      <FabControllerProvider>
+        <NavigationContainer>
+          <Stack.Navigator screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="Home" component={HomeScreen} />
+            <Stack.Screen name="Book" component={BookScreen} />
+          </Stack.Navigator>
+        </NavigationContainer>
+        {/* Sibling of the navigator, not inside any screen — one FAB and
+            one RecordingOverlay instance for the whole app, unaffected by
+            screen push/pop transitions. See FabController/GlobalRecordingUI. */}
+        <GlobalRecordingUI />
+      </FabControllerProvider>
       <StatusBar style="auto" />
     </SafeAreaProvider>
   );

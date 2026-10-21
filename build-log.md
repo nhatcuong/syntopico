@@ -1,5 +1,45 @@
 # Build Log
 
+## Session 18 — 2026-09-11
+
+### What we did
+- **Rewrote the home screen empty state** (PR #22, merged to `main`) — replaced "No books yet" / "Tap below to record your first note" with "What are you reading?" + a short hairline divider + a subtitle that spells out the voice-note format ("Say the book, the chapter, and what's on your mind, like you're talking to a friend!"), dropping the explicit "tap below" instruction since the FAB's own shadow/glow/breathing animation already signifies it's tappable
+  - Landed on the copy via a detour through *The Design of Everyday Things* — specifically the chapter 2 idea that conceptual models are a form of story, which reframed the subtitle from an instruction into a demonstrated example utterance
+  - Iterated layout for a dozen+ rounds on real simulator screenshots: left-align vs. center, block width/squareness, divider width/weight/spacing, font sizes relative to the `Wordmark` logo (settled on 22pt title / 19pt subtitle)
+- **Fixed the FAB sitting too high on the book screen** (PR #23, merged into `book-header-collapse-fix`) — root cause: the collapsing-header work's `content` wrapper View (added so the hero overlay gets the top safe-area inset) also pulled the FAB into excluding the *bottom* safe-area inset from its own positioning box, a ~34pt regression vs. the home screen. Fixed by moving the FAB back out to be a direct `SafeAreaView` child
+  - First diagnosis of this bug was backwards (see Not vibe) — corrected after re-measuring pixel positions on both screens
+- **Seeded a single real quote+thought note** (Calm Parents, Happy Kids, ch. 5, p. 237 — "Helicoptering comes from fear...Choose love.") into the dev DB for a screenshot, by temporarily swapping `scripts/seed-data/*.json` out and back rather than editing the checked-in seed files
+- **Architecture refactor, proposed by the user (see Not vibe), not requested as a bug fix**:
+  - Hoisted the FAB and `RecordingOverlay` out of `HomeScreen`/`BookScreen` into one persistent instance rendered as a sibling of the `Stack.Navigator` (`GlobalRecordingUI`, driven by a new `FabController` context) — each screen now just registers "what pressing the FAB should do right now" via `useFocusEffect`, including `BookScreen`'s three-way branching (plain note / amend / wrong-book). The FAB is now one component instance that screen push/pop transitions never touch
+  - Extracted `CentralInfoDisplay` (title + divider, shared by the empty state and the recording overlay) positioned with a fixed offset from the safe-area top via `useSafeAreaInsets()`, not `justifyContent: 'center'` — the centering was the actual root cause of an entire afternoon's manual pixel-tuning, since a centered block's position depends on the height of whatever follows it (a 3-line subtitle vs. a timer+waveform), so two screens using it could never structurally guarantee the same title position
+  - Verified end-to-end on simulator: both usages measured pixel-identical (screenshot rows 1052–1116 in both) after one shared constant, vs. two independently-tuned constants before
+- **Fixed notes getting visually covered near the bottom of the book screen** — two compounding bugs, both found via the user driving the on-device element inspector directly (see Not vibe), not from screenshots alone:
+  - `Animated.ScrollView` had no `style` prop (only `contentContainerStyle`), so it sized to its own content instead of filling the remaining space in `content` — fixed with an explicit `flex: 1` style
+  - `BookScreen`'s `SafeAreaView` still reserved the bottom safe-area inset (34pt) for `content`, while the (hoisted, global) FAB sits at `bottom: 30` from the *true* screen edge, ignoring that inset — the two boundaries nearly coincided by coincidence, reading as one deliberate gap. Fixed by adding `edges={['top', 'left', 'right']}` to that `SafeAreaView` so `content` also extends to the true edge, consistent with how the FAB already behaves
+  - Confirmed with a temporary bright-red `backgroundColor` probe on `content`, screenshotted before and after — before: stopped exactly 34pt short of the true bottom edge; after: reaches the true last pixel row
+
+### Decisions made
+- FAB and RecordingOverlay live above the navigator, not inside screens — trades a bit of indirection (screens register config instead of rendering directly) for eliminating an entire class of "the two screens don't match" bugs by construction
+- `CentralInfoDisplay` positions itself via a fixed safe-area-relative offset, not centering — deliberately gives up "auto-centers regardless of content" for "identical position everywhere, always"
+- Kept `BookScreen`'s "Amend"/"Wrong book?" capture triggers local to the screen (they need session-specific context) — only the FAB's resulting visual state/control and the overlay were hoisted, not the capture-starting logic itself
+- `content`/`ScrollView` on the book screen now deliberately ignore the bottom safe-area inset, matching the FAB's own true-edge positioning, rather than the other way around — consistency with the FAB won over strict safe-area compliance
+
+### Next session
+- Real-device sanity check of the empty state and recording overlay's dynamic-type behavior (only verified on iOS Simulator this session)
+- `book-header-collapse-fix` branch still needs its own PR merged to `main`
+
+### Not vibe
+- Sent the DOET reference itself ("take an example from *The Design of Everyday Things* — the chapter connecting Conceptual Model and Storytelling") that reframed the empty-state subtitle from an instruction into a demonstrated example — Claude had to look up which chapter, but the framing was the user's
+- Caught Claude's FAB-position diagnosis being backwards: after Claude "fixed" the home screen to match the book screen's (higher) position, called it out directly ("look, how the FAB button is much higher...") which prompted a re-measurement that found the book screen was the regression, not the home screen
+- Proposed the entire FAB/RecordingOverlay hoisting refactor unprompted, with the correct technical reasoning already in hand ("it floats above all, and is not part of the animation from home screen to book screen") — Claude had spent the session tuning per-screen constants to work around exactly the problem this solves structurally
+- Extended that same insight to `CentralInfoDisplay` and specified the actual mechanism ("position absolute vertically against the screen") — correctly identifying that centering (not just duplication) was the root cause of the alignment drift
+- Pushed back on Claude's "a few hours" implementation estimate ("a few hours?"), which was calibrated as if for a human dev's timeline rather than Claude's own — correctly caught as an unexamined default rather than a real estimate
+- Multiple precise, falsifiable design corrections rather than vague feedback — "the divider too subtle, increase it," then "back to height 1, but keep the new color" (isolating exactly which of two changes to keep); "recording screen still has the lower divider" (specific enough to reveal the `gap`+negative-margin fix hadn't actually worked, prompting the switch to explicit margins)
+- Asked to enable the RN element inspector directly rather than keep waiting on Claude's screenshot guessing — then used it themselves and reported the exact finding ("ScrollView is shorter than SceneView"), which is what actually located the bug Claude's own scroll screenshots had failed to reproduce
+- Rejected Claude's first "is this actually fixed?" theorizing with a precise correction: "it is not in scrolling all the way up that you see something — you need the text to be near the bottom of the screen" — redirected from a wrong repro (max-scroll position) to the right one (any mid-scroll moment)
+- Supplied the key diagnostic observation directly: "it is as if the bottom of the FAB is also the bottom of the scroll view" — this, not Claude's own reasoning, was what identified that the safe-area inset (34pt) and the FAB's offset (30pt) were two independent values that happened to nearly coincide
+- Held the line after Claude's red-probe test showed the gap exactly matched the safe-area inset and Claude concluded that meant "working as intended" — insisted the gap itself was the problem regardless of why it existed, which was the correct call (the fix was to make `content` match the FAB's true-edge positioning, not to leave a technically-correct-but-inconsistent inset)
+
 ## Session 16 — 2026-09-04
 
 ### What we did
