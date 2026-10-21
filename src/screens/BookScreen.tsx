@@ -13,7 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { getBookById, getSessionsByBookId, getBooksByLastSession, deleteBook, deleteSession, reassignSession, updateSessionNote, insertBook, BookRow, SessionRow } from '../db/database';
-import { exportBook } from '../services/bookBackup';
+import { exportBook, ExportFormat } from '../services/bookBackup';
 import { useRecording } from '../hooks/useRecording';
 import { useVoiceCapture } from '../hooks/useVoiceCapture';
 import { extractBookInfo, extractNoteOnly, amendNote } from '../services/extract';
@@ -209,10 +209,18 @@ export default function BookScreen({ navigation, route }: Props) {
     amendIsActive, wrongBookIsActive,
   ]));
 
-  async function handleExport() {
+  function handleExport() {
     setMenuOpen(false);
+    Alert.alert('Export notes', 'Choose a format', [
+      { text: 'Markdown — Read and share your notes', onPress: () => void shareExport('markdown'), isPreferred: true },
+      { text: 'JSON — Back up your data', onPress: () => void shareExport('json') },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }
+
+  async function shareExport(format: ExportFormat) {
     try {
-      await exportBook(bookId);
+      await exportBook(bookId, format);
     } catch (err: any) {
       Alert.alert('Export failed', err.message ?? 'Could not export book.');
     }
