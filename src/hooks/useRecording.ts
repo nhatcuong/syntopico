@@ -32,6 +32,8 @@ const NO_SPEECH_ALERT_MESSAGE = 'No speech was detected in that recording.';
 const NO_BOOK_ALERT_TITLE = "Couldn't identify a book";
 const NO_BOOK_ALERT_MESSAGE = "We couldn't tell what book this was about, so the note wasn't saved.";
 
+export const MAX_RECORDING_DURATION_MS = 5 * 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // Module-level helpers — no hook state, safe to call from anywhere
 // ---------------------------------------------------------------------------
@@ -75,6 +77,7 @@ export function useRecording(onComplete: (result: RecordingResult) => void, pinn
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
   const hadSoundRef = useRef(false);
+  const autoStopTriggeredRef = useRef(false);
 
   const durationMs = recorderState.durationMillis ?? 0;
 
@@ -83,6 +86,13 @@ export function useRecording(onComplete: (result: RecordingResult) => void, pinn
       hadSoundRef.current = true;
     }
   }, [recorderState.metering]);
+
+  useEffect(() => {
+    if (state === 'recording' && durationMs >= MAX_RECORDING_DURATION_MS && !autoStopTriggeredRef.current) {
+      autoStopTriggeredRef.current = true;
+      stop();
+    }
+  }, [state, durationMs]);
 
   // Transcript → book + session.
   async function processTranscript(transcript: string): Promise<ProcessResult> {
@@ -125,6 +135,7 @@ export function useRecording(onComplete: (result: RecordingResult) => void, pinn
       }
       await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
       hadSoundRef.current = false;
+      autoStopTriggeredRef.current = false;
       await recorder.prepareToRecordAsync();
       recorder.record();
       await activateKeepAwakeAsync('recording');

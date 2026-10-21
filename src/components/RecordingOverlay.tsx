@@ -1,8 +1,12 @@
 import { useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, Animated, ActivityIndicator } from 'react-native';
 import { BlurView } from 'expo-blur';
-import { NAVY, ACCENT } from '../tokens';
+import { NAVY, ACCENT, DESTRUCTIVE, MUTED } from '../tokens';
 import CentralInfoDisplay from './CentralInfoDisplay';
+import { MAX_RECORDING_DURATION_MS } from '../hooks/useRecording';
+
+const WARNING_THRESHOLD_MS = 15_000;
+const MAX_DURATION_LABEL = `max ${Math.floor(MAX_RECORDING_DURATION_MS / 60000)}:00`;
 
 type OverlayState = 'recording' | 'transcribing' | 'extracting';
 
@@ -67,6 +71,7 @@ export default function RecordingOverlay({ state, durationMs, customLabel }: Pro
 
   const mm = String(Math.floor(durationMs / 60000)).padStart(2, '0');
   const ss = String(Math.floor(durationMs / 1000) % 60).padStart(2, '0');
+  const isNearLimit = durationMs >= MAX_RECORDING_DURATION_MS - WARNING_THRESHOLD_MS;
 
   const processingLabel =
     state === 'transcribing' ? 'Transcribing…' :
@@ -77,7 +82,8 @@ export default function RecordingOverlay({ state, durationMs, customLabel }: Pro
       <View style={styles.tint} />
       {isRecording ? (
         <CentralInfoDisplay title={customLabel ?? 'Record your new reading note'} paddingHorizontal={32}>
-          <Text style={styles.timer}>{mm}:{ss}</Text>
+          <Text style={[styles.timer, isNearLimit && styles.timerWarning]}>{mm}:{ss}</Text>
+          <Text style={styles.maxDuration}>{MAX_DURATION_LABEL}</Text>
           <Waveform />
         </CentralInfoDisplay>
       ) : (
@@ -107,6 +113,15 @@ const styles = StyleSheet.create({
     color: NAVY,
     fontVariant: ['tabular-nums'],
     letterSpacing: -1,
+    marginBottom: 4,
+  },
+  timerWarning: {
+    color: DESTRUCTIVE,
+  },
+  maxDuration: {
+    fontSize: 13,
+    color: MUTED,
+    textAlign: 'center',
     marginBottom: 18,
   },
   processingSpinner: {

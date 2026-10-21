@@ -1,5 +1,30 @@
 # Build Log
 
+## Session 21 — 2026-09-12
+
+### What we did
+- **Capped recording length to 5 minutes**, to stop a note from growing long enough to hit `extract.ts`'s existing `MAX_MAX_TOKENS` truncation-and-retry path (a real, if rare, existing failure mode for a long enough ramble):
+  - `useRecording.ts`: added `MAX_RECORDING_DURATION_MS` and an effect that calls `stop()` automatically once elapsed duration reaches it, guarded by a ref so it only fires once — the auto-stop behaves exactly like the user tapping stop themselves (transcribes/extracts/saves normally), not a discard
+  - `RecordingOverlay.tsx`: added a small "max 5:00" caption under the big timer, and the timer switches to the destructive color in the last 15 seconds as a real-time warning before the cutoff, rather than a jarring silent cut
+- **Detour: tried `expo-device` for simulator-aware testing, hit an unrelated Xcode 26.5 bug, reverted**:
+  - Wanted the cap to auto-shorten to 20s on simulator (via `Device.isDevice`) so the 5-minute cutoff wouldn't take 5 real minutes to test each time
+  - Adding `expo-device` (a new native module) required a full dev-client rebuild, which failed with `ld: symbol(s) not found... cannot link directly with 'SwiftUICore' because product being built is not an allowed client of it` — reproduced identically after clearing DerivedData, so it's a real Xcode 26.5 toolchain issue on the `__preview.dylib`/debug-dylib link step, unrelated to our code or to `expo-device` itself
+  - Uninstalled `expo-device` rather than sink time into an unrelated native-toolchain bug; tested with a plain hardcoded `20 * 1000` temporarily instead (pure JS, no rebuild needed), confirmed the cutoff/warning/caption all work, then restored `5 * 60 * 1000` for this PR
+
+### Decisions made
+- Auto-stop at the cap reuses the exact same code path as a manual stop — no separate "recording maxed out" state or message, since from the user's perspective it should feel identical to having tapped stop right at 5:00
+- Dropped the simulator-vs-device auto-detection idea entirely rather than debug the Xcode issue — not worth taking on an unrelated native-toolchain investigation for a testing convenience
+- Warning color threshold (last 15s) and cap (5 min) are both plain constants, not configurable — no evidence yet that either needs to be
+
+### Next session
+- The Xcode 26.5 `SwiftUICore`/`__preview.dylib` linker issue is still unresolved and will resurface for any future new native module — worth a real investigation next time it blocks something, rather than working around it again
+- Still pending from earlier sessions: `SOUND_THRESHOLD_DB` (-40dB) real-device tuning; committing the pre-existing Session 17 build-log entry and `seed_dev_db.py`'s `--prod` flag into PR #21
+
+### Not vibe
+- Asked "does it make sense?" before building the max-duration feature at all, prompting a review of the actual technical rationale (the existing token-truncation failure path) rather than treating it as a given
+- Specified the exact placement question directly ("where do you plan to put the 'max 5 min.' text?") rather than leaving the UI detail to Claude, which is what produced the considered answer (caption tied visually to the timer, not competing with the existing label)
+- Cut the detour short with one plain question ("what is the problem? in simple terms") when the Xcode debugging started going deep, then immediately chose to drop the native-module approach rather than let Claude keep investigating an unrelated toolchain bug
+
 ## Session 20 — 2026-09-12
 
 ### What we did
