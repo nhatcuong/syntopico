@@ -1,5 +1,26 @@
 # Build Log
 
+## Session 20 — 2026-09-12
+
+### What we did
+- **Implemented "no book detected" handling**, the second half of the voice-capture edge-case work from last session:
+  - Removed `useRecording.ts`'s silent fallback to the last-read book when `extractBookInfo` returned `title: null` — that fallback conflated two very different situations (a genuine continuing-book note that just didn't restate the title, vs. off-topic/garbage speech) and could silently misattribute a note to the wrong book
+  - Rather than add a second LLM field to distinguish those two cases, redefined what counts as "identified" directly in the `title` field itself: a title is returned if stated directly, *or* if confidently inferable from the author's name plus enough description (e.g. "Kahneman's book about thinking fast and slow"); otherwise null — including a bare chapter number/reaction with no other identifying detail
+  - `useRecording.ts`'s `processTranscript` now returns a discriminated `ProcessResult` (`{ kind: 'success', result }` or `{ kind: 'no_book' }`) instead of `RecordingResult | null`, so `stop()` can show the same overlay-closes-then-native-alert pattern used for silence ("Couldn't identify a book" / OK only, nothing saved)
+  - Pinned-book recording (from inside a book's own screen) is unaffected — `extractNoteOnly` never extracted a title to begin with
+
+### Decisions made
+- Accepted the tradeoff this locks in: a Home-screen recording that only gives a chapter number/reaction with zero identifying info (no title, no author+description) is now discarded with an alert, rather than silently assumed to be about whatever book was last read. Continuing a book without restating anything is what the pinned book screen is already for
+- Kept this to one field (`title`) and one downstream branch (`null` vs. not), rejecting an earlier draft that added a separate `is_reading_note` boolean — simpler schema, same outcome
+
+### Next session
+- On-device test: confirm an off-topic ramble now triggers "Couldn't identify a book" and isn't saved, and confirm a real "author + description" mention (no literal title spoken) still correctly resolves a book
+- Still pending from before: `SOUND_THRESHOLD_DB` (-40dB) real-device tuning; committing the pre-existing Session 17 build-log entry and `seed_dev_db.py`'s `--prod` flag into PR #21
+
+### Not vibe
+- Caught the actual flaw in Claude's first no-book-detection plan by asking one direct question ("what would be the outcome if only chapter mentioned and not book title?") — this surfaced that discarding on any `title: null` would silently break the common continuing-reader case, which Claude's own plan had missed
+- Proposed the fix directly and correctly: "referring to a book = book title OR book author + more indication on what book it is" — a simpler, more concrete rule than Claude's own follow-up proposal (a separate `is_reading_note` LLM field), adopted as-is in place of it
+
 ## Session 19 — 2026-09-12
 
 ### What we did

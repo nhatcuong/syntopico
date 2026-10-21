@@ -202,7 +202,11 @@ export async function extractBookInfo(transcript: string): Promise<ExtractedNote
       properties: {
         title: {
           type: ['string', 'null'],
-          description: 'The book title if mentioned or clearly implied. Return null if no book is mentioned.',
+          description:
+            'The book title — return it if the speaker states it directly, or if it can be confidently inferred from the author\'s name plus enough description to know which specific book they mean (e.g. "Kahneman\'s book about thinking fast and slow" clearly means Thinking, Fast and Slow). ' +
+            'Return null if the transcript doesn\'t give enough to identify a specific book: no title, and no author with identifying detail. This includes off-topic speech, filler ("thank you", "okay"), and reading commentary that only gives a chapter number or reaction without naming or otherwise identifying the book. ' +
+            'Do not guess a title from an unrelated stray word — a transcript that is just "silence" or "thank you" is not a book called Silence or Thank You. ' +
+            'When unsure, prefer null over a guess.',
         },
         author: {
           type: ['string', 'null'],

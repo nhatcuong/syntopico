@@ -19,6 +19,7 @@ import { insertBook, insertReadingSession, getBooksByLastSession } from '../db/d
 
 export type RecordingState = 'idle' | 'recording' | 'transcribing' | 'extracting' | 'done';
 export type RecordingResult = { bookId: number; sessionId: number };
+type ProcessResult = { kind: 'success'; result: RecordingResult } | { kind: 'no_book' };
 
 // dB level above which we consider a metering sample "sound", not room noise.
 // expo-audio metering ranges roughly -160 (silence) to 0 (max). Needs tuning
@@ -27,6 +28,9 @@ const SOUND_THRESHOLD_DB = -40;
 
 const NO_SPEECH_ALERT_TITLE = "Didn't catch anything";
 const NO_SPEECH_ALERT_MESSAGE = 'No speech was detected in that recording.';
+
+const NO_BOOK_ALERT_TITLE = "Couldn't identify a book";
+const NO_BOOK_ALERT_MESSAGE = "We couldn't tell what book this was about, so the note wasn't saved.";
 
 // ---------------------------------------------------------------------------
 // Module-level helpers — no hook state, safe to call from anywhere
@@ -80,8 +84,8 @@ export function useRecording(onComplete: (result: RecordingResult) => void, pinn
     }
   }, [recorderState.metering]);
 
-  // Transcript → book + session. Returns null if the note is discarded.
-  async function processTranscript(transcript: string): Promise<RecordingResult | null> {
+  // Transcript → book + session.
+  async function processTranscript(transcript: string): Promise<ProcessResult> {
     if (pinnedBookId != null) {
       const pinnedBook = getBooksByLastSession().find(b => b.id === pinnedBookId) ?? null;
       let chapter: string | null = null;
@@ -97,25 +101,19 @@ export function useRecording(onComplete: (result: RecordingResult) => void, pinn
         Sentry.captureException(err);
       }
       const sessionId = insertReadingSession(pinnedBookId, { chapter, blocks }, transcript);
-      return { bookId: pinnedBookId, sessionId };
+      return { kind: 'success', result: { bookId: pinnedBookId, sessionId } };
     }
 
     const extracted = await extractBookInfo(transcript);
 
-    if (extracted.title !== null) {
-      const bookId = await findOrCreateBook(extracted);
-      const sessionId = insertReadingSession(bookId, extracted, transcript);
-      return { bookId, sessionId };
+    if (extracted.title === null) {
+      Sentry.addBreadcrumb({ category: 'recording', message: 'no_book_identified' });
+      return { kind: 'no_book' };
     }
 
-    Sentry.addBreadcrumb({ category: 'recording', message: 'no_book_identified' });
-    const lastBook = getBooksByLastSession()[0] ?? null;
-    if (lastBook) {
-      const sessionId = insertReadingSession(lastBook.id, extracted, transcript);
-      return { bookId: lastBook.id, sessionId };
-    }
-
-    return null;
+    const bookId = await findOrCreateBook(extracted);
+    const sessionId = insertReadingSession(bookId, extracted, transcript);
+    return { kind: 'success', result: { bookId, sessionId } };
   }
 
   async function start() {
@@ -171,18 +169,19 @@ export function useRecording(onComplete: (result: RecordingResult) => void, pinn
       }
 
       setState('extracting');
-      const result = await processTranscript(transcript);
+      const processed = await processTranscript(transcript);
 
       await deactivateKeepAwake('recording');
 
-      if (!result) {
+      if (processed.kind === 'no_book') {
         setState('idle');
+        Alert.alert(NO_BOOK_ALERT_TITLE, NO_BOOK_ALERT_MESSAGE);
         return;
       }
 
       setState('done');
       Sentry.addBreadcrumb({ category: 'recording', message: 'recording_completed' });
-      onCompleteRef.current(result);
+      onCompleteRef.current(processed.result);
     } catch (err) {
       const errorType = err instanceof WhisperError ? 'WhisperError'
         : err instanceof ExtractError ? 'ExtractError'
