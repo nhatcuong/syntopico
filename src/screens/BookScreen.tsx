@@ -32,26 +32,36 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Book'>;
 const HERO_HEIGHT = 176;
 const COLLAPSE_RANGE = 130;
 
-// Height of the nav row at rest — just the chevron/menu, no compact cover.
+// Visual height of the nav row at rest — just the chevron/menu. headerRow
+// itself is always COMPACT_HEADER_HEIGHT tall (below) so it never has to
+// resize once the compact cover needs that room, but headerButtonsRow (its
+// only real content at rest) is anchored to its top rather than centered,
+// and heroOverlay's rest position overlaps the row's unused lower portion
+// (see heroOverlay's own comment) — together making it *read* as this
+// shorter height at rest, with no dead space between the buttons and the
+// hero below them.
 const HEADER_REST_HEIGHT = 56;
 
-// The nav row's height when collapsed is DERIVED from the compact cover's
-// size, not an independently-chosen number — it must always be exactly big
-// enough to fit the cover plus top/bottom padding. Picking these separately
-// (as an earlier version of this file did) lets the row height and cover
-// size silently drift out of sync any time either one changes. Top/bottom
-// are intentionally asymmetric (more room below than above). The row's
-// height animates between HEADER_REST_HEIGHT and this value (below) rather
-// than being a second, disconnected fixed height — a static compact-sized
-// height would stay that size even at rest, and a separate overlay with
-// its own narrower width leaves an uncovered gap where scrolled content
-// shows through. One animated, always-opaque, full-width row avoids both.
+// The nav row's height is DERIVED from the compact cover's size, not an
+// independently-chosen number — it must always be exactly big enough to
+// fit the cover plus top/bottom padding. Picking these separately (as an
+// earlier version of this file did) lets the row height and cover size
+// silently drift out of sync any time either one changes. Top/bottom are
+// intentionally asymmetric (more room below than above). One constant,
+// always-opaque, full-width row (rather than a resizing row, or a second,
+// disconnected fixed-size overlay) avoids both a seam where scrolled
+// content could show through, and the row visibly resizing at all.
 const COMPACT_COVER_WIDTH = 58;
 const COMPACT_COVER_HEIGHT = 84;
 const COMPACT_HEADER_PADDING_TOP = 3;
 const COMPACT_HEADER_PADDING_BOTTOM = 12;
 const COMPACT_HEADER_HEIGHT =
   COMPACT_COVER_HEIGHT + COMPACT_HEADER_PADDING_TOP + COMPACT_HEADER_PADDING_BOTTOM;
+// How much of headerRow's own (constant) height sits unused at rest, below
+// where the chevron/menu row ends — this is exactly how far heroOverlay's
+// rest position (and heroSpacer's rest height) get pulled up, so that
+// unused space is reclaimed rather than left as a gap.
+const HEADER_UNUSED_REST_SPACE = COMPACT_HEADER_HEIGHT - HEADER_REST_HEIGHT;
 
 export default function BookScreen({ navigation, route }: Props) {
   const { bookId, highlightSessionId } = route.params;
@@ -67,26 +77,51 @@ export default function BookScreen({ navigation, route }: Props) {
 
   const scrollViewRef = useRef<ElementRef<typeof ScrollView>>(null);
   const scrollY = useRef(new Animated.Value(0)).current;
-  const heroHeight = scrollY.interpolate({
-    inputRange: [0, COLLAPSE_RANGE],
-    outputRange: [HERO_HEIGHT, 0],
-    extrapolate: 'clamp',
-  });
-  const headerHeight = scrollY.interpolate({
-    inputRange: [0, COLLAPSE_RANGE],
-    outputRange: [HEADER_REST_HEIGHT, COMPACT_HEADER_HEIGHT],
-    extrapolate: 'clamp',
-  });
-  const heroOpacity = scrollY.interpolate({
-    inputRange: [0, COLLAPSE_RANGE * 0.6],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
-  // Chevron and compact title crossfade over the same range, and hand off
-  // interactivity (below, via isCollapsed) at this same midpoint so there's
+  // Chevron and compact title crossfade over this range, and hand off
+  // interactivity (below, via isCollapsed) at its midpoint so there's
   // never a gap or overlap in what's tappable.
   const CROSSFADE_START = COLLAPSE_RANGE * 0.55;
   const CROSSFADE_MIDPOINT = (CROSSFADE_START + COLLAPSE_RANGE) / 2;
+  // Drives heroSpacer below — an invisible placeholder that frees up the
+  // hero's layout space (so the list slides up to fill it) without itself
+  // rendering anything, so nothing here ever needs to crop visible content.
+  // Its rest value is HERO_HEIGHT minus HEADER_UNUSED_REST_SPACE, not
+  // HERO_HEIGHT itself — heroOverlay's rest position (below) is pulled up
+  // by that same amount, overlapping headerRow's own unused space instead
+  // of sitting below it, so this doesn't also reserve room for it there —
+  // that would just reopen the same dead space one row lower, between the
+  // hero and the list. Finishes shrinking exactly at CROSSFADE_START, the
+  // same point the compact header content (below) starts fading in — one
+  // clean handoff.
+  const heroHeight = scrollY.interpolate({
+    inputRange: [0, CROSSFADE_START],
+    outputRange: [HERO_HEIGHT - HEADER_UNUSED_REST_SPACE, 0],
+    extrapolate: 'clamp',
+  });
+  // heroOverlay (below) has a higher zIndex than headerRow and the scroll
+  // content, so as it translates up it paints over both rather than being
+  // hidden behind either — the same crossfade-over-whatever's-underneath
+  // relationship headerRow's own chevron/compact-title swap already uses.
+  // That means neither headerRow occluding it nor it overlapping the list
+  // are actual problems, so heroTranslateY and heroOpacity just need to
+  // finish together, 30% faster than heroHeight above shrinks (i.e. over a
+  // shorter scroll distance) per feedback on the pace.
+  const HERO_MOVE_RANGE = CROSSFADE_START / 1.3;
+  // Capped at -HEADER_REST_HEIGHT (heroOverlay's rest top, below) so its top
+  // edge lands flush with this screen's own top edge and never goes past
+  // it — that boundary (unlike headerRow) has nothing covering it, and
+  // heroOverlay has no overflow clipping of its own, so going further would
+  // render into the safe-area inset/status-bar region uncropped.
+  const heroTranslateY = scrollY.interpolate({
+    inputRange: [0, HERO_MOVE_RANGE],
+    outputRange: [0, -HEADER_REST_HEIGHT],
+    extrapolate: 'clamp',
+  });
+  const heroOpacity = scrollY.interpolate({
+    inputRange: [0, HERO_MOVE_RANGE],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
   const compactTitleOpacity = scrollY.interpolate({
     inputRange: [CROSSFADE_START, COLLAPSE_RANGE],
     outputRange: [0, 1],
@@ -240,18 +275,12 @@ export default function BookScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header — one animated, always-opaque, full-width row. Its height
-          animates from HEADER_REST_HEIGHT (just chevron/menu) up to
-          COMPACT_HEADER_HEIGHT (room for the compact cover) as the list
-          scrolls. Using one element for this — rather than a fixed-height
-          row plus a separately-sized overlay — means there's no seam where
-          the two could have different widths/heights and leave a gap for
-          scrolled content to show through. */}
-      <Animated.View style={[styles.headerRow, { height: headerHeight }]}>
-        {/* Fixed-height wrapper so the buttons stay anchored to a stable
-            reference (HEADER_REST_HEIGHT) instead of being centered within
-            headerRow's own animated (changing) height, which would make
-            them drift up/down as the row grows/shrinks. */}
+    <View style={styles.content}>
+      {/* Header — one always-opaque, full-width row, fixed at its final
+          (compact-cover-sized) height from the very start. It never grows —
+          only its content crossfades: the chevron/menu row fades out as the
+          compact cover+title fades in, in place. */}
+      <Animated.View style={styles.headerRow}>
         <View style={styles.headerButtonsRow}>
           <Animated.View style={{ opacity: chevronOpacity }} pointerEvents={isCollapsed ? 'none' : 'auto'}>
             <TouchableOpacity onPress={() => navigation.goBack()} style={styles.navButton} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -265,15 +294,8 @@ export default function BookScreen({ navigation, route }: Props) {
 
         {/* Compact title — invisible (opacity 0, pointerEvents none) until
             scrolled past the collapse point, so it never affects the
-            expanded/at-rest layout even though its box is always present.
-            height is driven by the SAME headerHeight Animated.Value as
-            headerRow itself (not inferred via bottom:0) — an animated
-            parent height doesn't reliably re-trigger Yoga's layout pass
-            for a child relying on implicit/inferred sizing. Its JSX
-            position among headerRow's children doesn't matter — it's
-            position:absolute, so it doesn't participate in headerRow's
-            own layout flow. */}
-        <Animated.View style={[styles.compactTitleTouchable, { height: headerHeight }]} pointerEvents={isCollapsed ? 'auto' : 'none'}>
+            expanded/at-rest look even though its box is always present. */}
+        <Animated.View style={styles.compactTitleTouchable} pointerEvents={isCollapsed ? 'auto' : 'none'}>
           <TouchableOpacity onPress={expandHeader} activeOpacity={0.7} style={styles.compactTitleTouchableInner}>
             <Animated.View style={[styles.compactTitle, { opacity: compactTitleOpacity }]}>
               {book?.coverUrl ? (
@@ -295,24 +317,10 @@ export default function BookScreen({ navigation, route }: Props) {
         <Animated.View style={[styles.headerBottomDivider, { opacity: compactTitleOpacity }]} pointerEvents="none" />
       </Animated.View>
 
-      {/* Collapsing hero — cover + full metadata, shrinks away as the list scrolls */}
-      <Animated.View style={[styles.heroContainer, { height: heroHeight, opacity: heroOpacity }]}>
-        {book && (
-          <View style={styles.bookHeader}>
-            {book.coverUrl ? (
-              <Image source={{ uri: book.coverUrl }} style={styles.cover} resizeMode="cover" />
-            ) : (
-              <View style={styles.coverPlaceholder} />
-            )}
-            <View style={styles.bookMeta}>
-              <Text style={styles.bookTitle}>{book.title}</Text>
-              {book.author && <Text style={styles.bookAuthor}>by {book.author}</Text>}
-              {book.pageCount != null && <Text style={styles.bookDetail}>{book.pageCount} pages</Text>}
-              {book.isbn && <Text style={styles.bookDetail}>ISBN {book.isbn}</Text>}
-            </View>
-          </View>
-        )}
-      </Animated.View>
+      {/* Invisible placeholder — frees up the hero's layout space (so the
+          list slides up to fill it) as the list scrolls. Renders nothing;
+          the hero's actual visual content is heroOverlay, below. */}
+      <Animated.View style={{ height: heroHeight }} />
 
       <Animated.ScrollView
         ref={scrollViewRef}
@@ -407,6 +415,38 @@ export default function BookScreen({ navigation, route }: Props) {
         <View style={{ height: 130 }} />
       </Animated.ScrollView>
 
+      {/* Hero's actual visual content — fixed size, no overflow clipping,
+          never itself resized or cropped. Slides up (heroTranslateY) and
+          fades (heroOpacity) together; zIndex above both headerRow and the
+          scroll content means it paints over whatever it moves past —
+          crossfading over it, the same relationship headerRow's own
+          chevron/compact-title swap uses — rather than being hidden behind
+          it. pointerEvents none — it has no interactive elements, and
+          shouldn't block taps on whatever's scrolled underneath it. */}
+      <Animated.View
+        style={[
+          styles.heroOverlay,
+          { opacity: heroOpacity, transform: [{ translateY: heroTranslateY }] },
+        ]}
+        pointerEvents="none"
+      >
+        {book && (
+          <View style={styles.bookHeader}>
+            {book.coverUrl ? (
+              <Image source={{ uri: book.coverUrl }} style={styles.cover} resizeMode="cover" />
+            ) : (
+              <View style={styles.coverPlaceholder} />
+            )}
+            <View style={styles.bookMeta}>
+              <Text style={styles.bookTitle}>{book.title}</Text>
+              {book.author && <Text style={styles.bookAuthor}>by {book.author}</Text>}
+              {book.pageCount != null && <Text style={styles.bookDetail}>{book.pageCount} pages</Text>}
+              {book.isbn && <Text style={styles.bookDetail}>ISBN {book.isbn}</Text>}
+            </View>
+          </View>
+        )}
+      </Animated.View>
+
       {/* Recording overlay */}
       {showOverlay && (
         <RecordingOverlay
@@ -430,7 +470,29 @@ export default function BookScreen({ navigation, route }: Props) {
         />
       )}
 
-      {/* FAB */}
+      {/* Menu */}
+      {menuOpen && (
+        <View style={[StyleSheet.absoluteFillObject, { zIndex: 999 }]}>
+          <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setMenuOpen(false)} />
+          <View style={styles.menuCard}>
+            <TouchableOpacity style={styles.menuItem} onPress={handleExport}>
+              <Text style={styles.menuItemText}>Export notes</Text>
+            </TouchableOpacity>
+            <View style={styles.menuDivider} />
+            <TouchableOpacity style={styles.menuItem} onPress={handleDelete}>
+              <Text style={styles.menuItemDestructive}>Delete book</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+    </View>
+
+      {/* FAB — deliberately a direct child of SafeAreaView, not of
+          `content`: `content`'s box excludes the bottom safe-area inset
+          (needed so heroOverlay gets the top inset), which would push the
+          FAB up by that inset's height too. Home screen's FAB sits at the
+          same true distance from the bottom edge, so this keeps both
+          screens visually consistent. */}
       <View style={styles.fabContainer}>
         <Fab
           fabState={
@@ -447,22 +509,6 @@ export default function BookScreen({ navigation, route }: Props) {
           }
         />
       </View>
-
-      {/* Menu */}
-      {menuOpen && (
-        <View style={[StyleSheet.absoluteFillObject, { zIndex: 999 }]}>
-          <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setMenuOpen(false)} />
-          <View style={styles.menuCard}>
-            <TouchableOpacity style={styles.menuItem} onPress={handleExport}>
-              <Text style={styles.menuItemText}>Export notes</Text>
-            </TouchableOpacity>
-            <View style={styles.menuDivider} />
-            <TouchableOpacity style={styles.menuItem} onPress={handleDelete}>
-              <Text style={styles.menuItemDestructive}>Delete book</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
     </SafeAreaView>
   );
 }
@@ -472,21 +518,30 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: PAPER,
   },
-  // Slim and constant — sized only for the chevron/menu buttons, at rest or
-  // collapsed. The compact title lives in its own overlay (below), sized
-  // independently, so it never has to influence this row's height.
-  // height is set inline (animated, HEADER_REST_HEIGHT -> COMPACT_HEADER_HEIGHT).
-  // Always opaque + full width, so as it grows there's never a seam where a
-  // separately-sized element could leave scrolled content uncovered — see
-  // the comment by HEADER_REST_HEIGHT for why this replaced a two-element
-  // (fixed row + independently-sized overlay) approach.
+  // position:relative anchor for heroOverlay's absolute positioning — a
+  // direct child of SafeAreaView isn't reliable for this, since SafeAreaView
+  // applies the top safe-area inset in a way absolutely-positioned children
+  // don't consistently inherit, unlike normal-flow siblings like headerRow.
+  // overflow:hidden crops heroOverlay once heroTranslateY carries it above
+  // this box's own top edge — that point is the safe-area inset itself
+  // (status bar/notch), which nothing else here occupies or covers, so
+  // without this the overflowing sliver renders there uncovered.
+  content: {
+    flex: 1,
+    overflow: 'hidden',
+  },
+  // Always opaque + full width, fixed at its final (compact-cover-sized)
+  // height from the start — it never grows, so there's no seam or overflow
+  // risk from content not yet fitting; only opacity ever crossfades inside it.
   headerRow: {
+    height: COMPACT_HEADER_HEIGHT,
     paddingHorizontal: 16,
-    // flex-start, not center: headerButtonsRow below has its own fixed
-    // height and anchors to headerRow's stable top edge. Centering it
-    // within headerRow's own animated (changing) height would make it
-    // drift up/down as the row grows/shrinks, taking the buttons with it.
     flexDirection: 'row',
+    // flex-start, not center: headerButtonsRow is this row's only real
+    // content at rest, and anchoring it to the top (rather than centering
+    // it in the full, taller-than-it-needs-to-be height) is what makes the
+    // row read as a plain, slim nav bar at rest instead of an oversized one
+    // with dead space around the buttons — see HEADER_REST_HEIGHT's comment.
     alignItems: 'flex-start',
     position: 'relative',
     // Sibling paint order in RN follows JSX order regardless of position,
@@ -495,9 +550,8 @@ const styles = StyleSheet.create({
     // this row instead of staying underneath it.
     zIndex: 10,
     backgroundColor: PAPER,
+    overflow: 'hidden',
   },
-  // Fixed height (never animated) so the chevron/menu buttons keep a
-  // constant vertical position regardless of headerRow's current height.
   headerButtonsRow: {
     height: HEADER_REST_HEIGHT,
     width: '100%',
@@ -529,19 +583,17 @@ const styles = StyleSheet.create({
     color: NAVY,
     letterSpacing: 1,
   },
-  // Absolutely positioned (relative to headerRow, which is now the
+  // Absolutely positioned (relative to headerRow, which is the
   // `position: relative` anchor) so the compact title can start flush with
   // the true left edge once the chevron hides, rather than being boxed in
-  // by the chevron's own layout space. top:0/bottom:0 span whatever
-  // headerRow's current animated height is — safe now that headerRow
-  // itself grows to match, rather than this needing its own separate size.
+  // by the chevron's own layout space. Spans headerRow's full (constant)
+  // height exactly.
   compactTitleTouchable: {
-    // height is set inline from the same headerHeight Animated.Value as
-    // headerRow — see the comment at the JSX usage site for why.
     position: 'absolute',
     left: 20,
     right: 44,
     top: 0,
+    height: COMPACT_HEADER_HEIGHT,
   },
   compactTitleTouchableInner: {
     flex: 1,
@@ -622,16 +674,24 @@ const styles = StyleSheet.create({
     // header's height itself, so scroll content starts immediately after it.
     paddingTop: 0,
   },
-  heroContainer: {
-    // Horizontal padding is safe here (width isn't being animated to 0),
-    // but vertical spacing is intentionally NOT padding on this element:
-    // it animates to height:0 when collapsed, and padding on an explicit
-    // height:0 view isn't guaranteed to be absorbed rather than persisting
-    // as visible space. Moving it to bookHeader's margin instead means
-    // overflow:hidden here clips it unconditionally, regardless of that
-    // engine detail.
+  // top is HEADER_REST_HEIGHT, not headerRow's own (taller) height — this
+  // deliberately overlaps headerRow's unused lower portion (see
+  // HEADER_UNUSED_REST_SPACE) rather than sitting flush below all of it, so
+  // that unused space reads as reclaimed instead of as a gap. Safe to
+  // overlap: zIndex above both headerRow (10) and the scroll content means
+  // this paints over them rather than being hidden behind either, and
+  // there's nothing else in headerRow's unused portion to cover. Fixed size
+  // matching HERO_HEIGHT — it never resizes, so bookHeader inside it is
+  // never cropped; heroTranslateY (see JSX usage) is the only thing that
+  // ever moves it.
+  heroOverlay: {
+    position: 'absolute',
+    top: HEADER_REST_HEIGHT,
+    left: 0,
+    right: 0,
+    height: HERO_HEIGHT,
     paddingHorizontal: 20,
-    overflow: 'hidden',
+    zIndex: 20,
   },
   bookHeader: {
     flexDirection: 'row',
