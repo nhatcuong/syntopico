@@ -1,5 +1,36 @@
 # Build Log
 
+## Session 19 — 2026-09-12
+
+### What we did
+- **Brainstormed voice-capture edge cases**: what happens when the user taps record but says nothing, or says something unrelated to a book — anchored on a real, lived failure ("I say nothing, Whisper returns something like 'Silence', and Claude looks for a book with 'Silence' in the name")
+- Settled on a common failure shape for both silence and (next session) "no book detected": the recording overlay closes and a plain native `Alert.alert` (title + message + OK, no retry button) tells the user nothing was saved — no "save as general note" fallback, since that's out of scope for what's meant to be an edge case
+- **Implemented silence detection** in `useRecording.ts`:
+  - Enabled `isMeteringEnabled` on the `expo-audio` recorder and track whether any live metering sample crosses `SOUND_THRESHOLD_DB` (-40dB, a first guess that needs on-device tuning) during the recording, via the same poll that already drives the duration timer
+  - If no sample ever crossed the threshold, skip the Whisper API call entirely and show the alert — cheaper than any post-hoc check, since it never spends an API call on dead air
+  - Kept the existing post-Whisper empty-transcript check as a second net (covers non-silent but non-speech sound, e.g. rustling), now wired to the same alert instead of silently resetting to idle
+  - Verified end-to-end on the simulator: a silent recording now shows "Didn't catch anything" instead of being sent to Whisper/Claude
+- **Pulled PR #24 into this branch locally** (fast-forward merge, stashing/reapplying uncommitted work around it) after the user was confused why the simulator still showed the old UI — PR #24 was already stacked on top of this branch on GitHub, it just hadn't been pulled locally yet
+
+### Decisions made
+- Silence and no-book-detected both resolve to the same UX shape (overlay closes → native alert → discard, no retry, no fallback save) rather than each growing its own bespoke handling
+- Chose on-device metering over two alternatives considered and rejected: a hardcoded Whisper-hallucination phrase blocklist (English-only, brittle, misses variants) and parsing OpenAI's `verbose_json`/`no_speech_prob` per-segment confidence (turned out to be about as much implementation work as on-device detection, with an added API cost)
+- "No book detected" handling (the `title: null` path in `extractBookInfo`) deferred to next session — scoped separately from silence detection even though they share the same alert pattern
+
+### Next session
+- Implement "no book detected": stop `useRecording.ts` from silently falling back to the last-read book when `extractBookInfo` returns `title: null`; tighten that field's schema description so the LLM doesn't guess a title from stray/filler transcript text (the "Silence" bug)
+- `SOUND_THRESHOLD_DB` (-40dB) needs real-device tuning across a few different rooms/mic conditions, not just simulator taps
+- Commit the pre-existing, unrelated local changes to `build-log.md` (Session 17 entry) and `scripts/seed_dev_db.py` (`--prod` seeding flag) into PR #21 separately — left untouched here since they predate this session
+- `book-header-collapse-fix` (#21) still needs merging to `main`, which will require retargeting PR #24's base branch afterward
+
+### Not vibe
+- Diagnosed the actual bug from one concrete, lived anecdote (Whisper transcribing silence as "Silence", Claude matching it to a book by that name) rather than an abstract spec — that example anchored every downstream design choice, including today's schema-tightening plan
+- Rejected the "save as general note" fallback outright as scope creep for what should stay a narrow edge case, keeping the fix to detect-and-discard only
+- Chose a plain native alert (title + message, OK only, no retry) over a custom overlay error state, correctly judging that tapping the FAB again already is the retry
+- Pushed back twice on the detection approach: first questioning whether a hardcoded hallucination-phrase blocklist was really the best plan, then — after Claude's countered `verbose_json`/`no_speech_prob` proposal — noticing it had become just as complex as on-device detection and asking to go back to that instead; the on-device metering design only happened because of that second correction
+- Recognized "still seeing the old interface" as a stale-local-branch problem rather than a code bug, and asked the precise scoping question ("do I need restarting the sim?") that kept the fix to a plain JS reload instead of a bigger rebuild
+- Asked directly whether stacked PRs are possible, prompting confirmation that `book-header-collapse-fix` → `global-fab-and-scroll-fix` was already organized that way on GitHub
+
 ## Session 18 — 2026-09-11
 
 ### What we did

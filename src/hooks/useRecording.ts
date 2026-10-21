@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Alert } from 'react-native';
 import {
   useAudioRecorder,
@@ -19,6 +19,14 @@ import { insertBook, insertReadingSession, getBooksByLastSession } from '../db/d
 
 export type RecordingState = 'idle' | 'recording' | 'transcribing' | 'extracting' | 'done';
 export type RecordingResult = { bookId: number; sessionId: number };
+
+// dB level above which we consider a metering sample "sound", not room noise.
+// expo-audio metering ranges roughly -160 (silence) to 0 (max). Needs tuning
+// against real on-device recordings.
+const SOUND_THRESHOLD_DB = -40;
+
+const NO_SPEECH_ALERT_TITLE = "Didn't catch anything";
+const NO_SPEECH_ALERT_MESSAGE = 'No speech was detected in that recording.';
 
 // ---------------------------------------------------------------------------
 // Module-level helpers — no hook state, safe to call from anywhere
@@ -58,12 +66,19 @@ function recordingErrorMessage(err: unknown): string {
 
 export function useRecording(onComplete: (result: RecordingResult) => void, pinnedBookId?: number) {
   const [state, setState] = useState<RecordingState>('idle');
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
   const recorderState = useAudioRecorderState(recorder);
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
+  const hadSoundRef = useRef(false);
 
   const durationMs = recorderState.durationMillis ?? 0;
+
+  useEffect(() => {
+    if (recorderState.metering != null && recorderState.metering > SOUND_THRESHOLD_DB) {
+      hadSoundRef.current = true;
+    }
+  }, [recorderState.metering]);
 
   // Transcript → book + session. Returns null if the note is discarded.
   async function processTranscript(transcript: string): Promise<RecordingResult | null> {
@@ -111,6 +126,7 @@ export function useRecording(onComplete: (result: RecordingResult) => void, pinn
         return;
       }
       await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+      hadSoundRef.current = false;
       await recorder.prepareToRecordAsync();
       recorder.record();
       await activateKeepAwakeAsync('recording');
@@ -133,14 +149,24 @@ export function useRecording(onComplete: (result: RecordingResult) => void, pinn
         return;
       }
 
+      if (!hadSoundRef.current) {
+        Sentry.addBreadcrumb({ category: 'recording', message: 'no_sound_detected' });
+        await deactivateKeepAwake('recording');
+        setState('idle');
+        Alert.alert(NO_SPEECH_ALERT_TITLE, NO_SPEECH_ALERT_MESSAGE);
+        return;
+      }
+
       const fileUri = await saveAudioFile(tempUri);
 
       setState('transcribing');
       const transcript = await transcribeAudio(fileUri);
 
       if (!transcript.trim()) {
+        Sentry.addBreadcrumb({ category: 'recording', message: 'empty_transcript' });
         await deactivateKeepAwake('recording');
         setState('idle');
+        Alert.alert(NO_SPEECH_ALERT_TITLE, NO_SPEECH_ALERT_MESSAGE);
         return;
       }
 
