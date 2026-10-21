@@ -1,4 +1,4 @@
-import { Share } from 'react-native';
+import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import {
@@ -30,7 +30,27 @@ export type BookBackup = {
   }[];
 };
 
-export async function exportBook(bookId: number): Promise<void> {
+export type ExportFormat = 'markdown' | 'json';
+
+export function bookToMarkdown(backup: BookBackup): string {
+  const { book, sessions } = backup;
+  const heading = (text: string) => text.replace(/[\r\n]+/g, ' ');
+  const metadata = Object.entries(book)
+    .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+    .join('\n');
+  const notes = [...sessions].sort((a, b) => a.sessionDate.localeCompare(b.sessionDate)).map(session => {
+    const title = heading(session.sessionDate) + (session.chapter ? ` — ${heading(session.chapter)}` : '');
+    const body = session.note?.length
+      ? session.note.map(block => block.type === 'quote'
+        ? block.text.split('\n').map(line => `> ${line}`).join('\n') + (block.location ? `\n> — ${heading(block.location)}` : '')
+        : block.text).join('\n\n')
+      : session.rawTranscript ?? '';
+    return `## ${title}\n\n${body}`;
+  });
+  return `---\n${metadata}\n---\n\n# ${heading(book.title)}\n\n${notes.length ? notes.join('\n\n') : 'No reading notes yet.'}\n`;
+}
+
+export async function exportBook(bookId: number, format: ExportFormat = 'markdown'): Promise<void> {
   const book = getBookById(bookId);
   if (!book) throw new Error('Book not found');
 
@@ -55,13 +75,20 @@ export async function exportBook(bookId: number): Promise<void> {
     })),
   };
 
-  const filename = `${book.title.replace(/[^\w\s]/g, '').replace(/\s+/g, '_')}_backup.json`;
+  if (!(await Sharing.isAvailableAsync())) {
+    throw new Error('Sharing is not available on this device.');
+  }
+  const stem = book.title.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_') || 'book';
+  const filename = format === 'markdown' ? `${stem}_notes.md` : `${stem}_backup.json`;
+  if (!FileSystem.cacheDirectory) throw new Error('Export storage is unavailable.');
   const uri = FileSystem.cacheDirectory + filename;
-
-  const json = JSON.stringify(backup, null, 2);
-  console.log('[export] sharing', json.length, 'chars');
-  await Share.share({ message: json, title: book.title });
-  console.log('[export] done');
+  const content = format === 'markdown' ? bookToMarkdown(backup) : JSON.stringify(backup, null, 2);
+  await FileSystem.writeAsStringAsync(uri, content);
+  await Sharing.shareAsync(uri, {
+    mimeType: format === 'markdown' ? 'text/markdown' : 'application/json',
+    UTI: format === 'markdown' ? 'net.daringfireball.markdown' : 'public.json',
+    dialogTitle: `Export ${book.title}`,
+  });
 }
 
 export type ImportResult =
