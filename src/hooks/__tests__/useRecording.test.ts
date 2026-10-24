@@ -1,28 +1,4 @@
-/**
- * Tests for useRecording — the core recording + book identification hook.
- *
- * These tests focus on the fallback branching logic that runs when Claude
- * extracts a null title from the transcript:
- *
- *   Case A — null title + books exist:
- *     The note should be silently attached to the most recently recorded book
- *     (getBooksByLastSession()[0]). onComplete is called with that book's ID.
- *
- *   Case B — null title + NO books in library:
- *     There is no book to fall back to. The hook must NOT silently discard
- *     the note — it must surface an error to the user via Alert.
- *
- * Strategy: mock every I/O layer (expo-audio, FileSystem, Whisper, Claude,
- * Google Books, SQLite) so tests run without any native modules or network.
- * Each mock is configured to return the minimal valid data needed to reach
- * the branching logic under test.
- *
- * Note on act() / async: state updates inside the hook must be wrapped in
- * act() so React flushes them synchronously. We use waitFor from
- * @testing-library/react-native to wait for async operations to settle.
- */
-
-import { renderHook, act, waitFor } from '@testing-library/react-native';
+import { renderHook, act } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import { useRecording } from '../useRecording';
 
@@ -45,7 +21,7 @@ jest.mock('expo-audio', () => {
   };
   return {
     useAudioRecorder: jest.fn().mockReturnValue(mockRecorder),
-    useAudioRecorderState: jest.fn().mockReturnValue({ durationMillis: 3000, isRecording: false }),
+    useAudioRecorderState: jest.fn().mockReturnValue({ durationMillis: 0, isRecording: false, metering: -60 }),
     RecordingPresets: { HIGH_QUALITY: {} },
     setAudioModeAsync: jest.fn().mockResolvedValue(undefined),
     requestRecordingPermissionsAsync: jest.fn().mockResolvedValue({ granted: true }),
@@ -153,226 +129,122 @@ jest.mock('../../db/database', () => ({
 import { getBooksByLastSession, insertReadingSession } from '../../db/database';
 import { extractBookInfo, extractNoteOnly, ExtractError } from '../../services/extract';
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+import { useAudioRecorderState } from 'expo-audio';
+import { transcribeAudio } from '../../services/whisper';
+import { findMatchingBook } from '../../services/matchBook';
+import { insertBook } from '../../db/database';
 
-/** Drives the hook through a full start() → stop() cycle. */
-async function recordAndStop(hookResult: { current: ReturnType<typeof useRecording> }) {
-  await act(async () => {
-    await hookResult.current.start();
-  });
-  await act(async () => {
-    await hookResult.current.stop();
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Setup
-// ---------------------------------------------------------------------------
+const book = {
+  id: 5, title: 'Deep Work', author: 'Cal Newport', coverUrl: null,
+  isbn: null, googleBooksId: null, description: null, pageCount: null,
+  createdAt: '2026-01-01T00:00:00Z', lastSessionAt: null,
+};
 
 beforeEach(() => {
-  jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-});
-
-afterEach(() => {
   jest.clearAllMocks();
+  jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  (useAudioRecorderState as jest.Mock).mockReturnValue({
+    durationMillis: 0, isRecording: false, metering: -60,
+  });
+  (getBooksByLastSession as jest.Mock).mockReturnValue([book]);
 });
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+afterEach(() => jest.restoreAllMocks());
 
-describe('useRecording — null title fallback', () => {
-  /**
-   * CASE A: null title + books in library.
-   *
-   * Scenario: user says "Just a quick thought about what I read today."
-   * Claude returns title: null because no book was mentioned.
-   * The library has at least one book (getBooksByLastSession() returns a non-empty array).
-   *
-   * Expected behaviour: the note is silently attached to getBooksByLastSession()[0] — the
-   * most recently recorded book — and onComplete is called with that book's ID.
-   * No Alert is shown; the user just sees their note appear on the right book.
-   */
-  it('attaches the note to the most recent book when title is null and books exist', async () => {
-    // Arrange: library has one book with id=7
-    const existingBook = {
-      id: 7,
-      title: 'Atomic Habits',
-      author: 'James Clear',
-      coverUrl: null,
-      isbn: null,
-      googleBooksId: null,
-      description: null,
-      pageCount: null,
-      createdAt: '2026-04-01T10:00:00Z',
-      lastSessionAt: '2026-04-10T09:00:00Z',
-    };
-    (getBooksByLastSession as jest.Mock).mockReturnValue([existingBook]);
-
-    // extractBookInfo already defaults to null title (see module mock above)
-
-    const onComplete = jest.fn();
-    const { result } = renderHook(() => useRecording(onComplete));
-
-    await recordAndStop(result);
-
-    // onComplete must be called — the recording was not discarded
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-
-    // The bookId passed to onComplete must be the existing book's id, not a new one
-    expect(onComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ bookId: existingBook.id })
-    );
-
-    // The session was inserted under the existing book
-    expect(insertReadingSession).toHaveBeenCalledWith(
-      existingBook.id,
-      expect.anything(),
-      expect.anything()
-    );
-
-    // No error should have been shown to the user
-    expect(Alert.alert).not.toHaveBeenCalled();
+async function capture(options: { pinned?: number; metering?: number; duration?: number } = {}) {
+  const onComplete = jest.fn();
+  const hook = renderHook(() => useRecording(onComplete, options.pinned));
+  await act(async () => { await hook.result.current.start(); });
+  (useAudioRecorderState as jest.Mock).mockReturnValue({
+    durationMillis: options.duration ?? 3000,
+    isRecording: true,
+    metering: options.metering ?? -20,
   });
+  // start() resets sound detection; deliver a sample during this recording.
+  hook.rerender({});
+  await act(async () => { await hook.result.current.stop(); });
+  return { ...hook, onComplete };
+}
 
-  /**
-   * CASE B: null title + empty library.
-   *
-   * Scenario: user opens the app for the first time and speaks a note that
-   * doesn't name a book. There are no books to fall back to.
-   *
-   * Expected behaviour: note is silently discarded and onComplete is NOT called.
-   */
-  it('silently discards note when no book identified and library is empty', async () => {
-    (getBooksByLastSession as jest.Mock).mockReturnValue([]);
+describe('useRecording — unidentified book', () => {
+  it.each([['populated', [book]], ['empty', []]])(
+    'rejects an unidentified note with a %s library', async (_label, books) => {
+      (getBooksByLastSession as jest.Mock).mockReturnValue(books);
+      const { result, onComplete } = await capture();
+      expect(extractBookInfo).toHaveBeenCalledWith('Test transcript text.');
+      expect(result.current.state).toBe('idle');
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(insertReadingSession).not.toHaveBeenCalled();
+      expect(insertBook).not.toHaveBeenCalled();
+      expect(Alert.alert).toHaveBeenCalledWith(
+        "Couldn't identify a book",
+        "We couldn't tell what book this was about, so the note wasn't saved.",
+      );
+    },
+  );
 
-    const onComplete = jest.fn();
-    const { result } = renderHook(() => useRecording(onComplete));
-
-    await act(async () => { await result.current.start(); });
-    await act(async () => { await result.current.stop(); });
-
-    await waitFor(() => expect(result.current.state).toBe('idle'));
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(Alert.alert).not.toHaveBeenCalled();
-  });
-
-  /**
-   * Regression guard: when a title IS extracted, the null-title fallback path
-   * must NOT activate. The note should be routed through the normal
-   * book-identification flow (match existing or fetch new metadata).
-   *
-   * This ensures a future refactor of the null-title branch can't accidentally
-   * swallow notes that have a valid title.
-   */
-  it('does not use the fallback when extractBookInfo returns a non-null title', async () => {
-    // Arrange: Claude extracts a real title this time
+  it('routes a recognized title to its matching book', async () => {
     (extractBookInfo as jest.Mock).mockResolvedValueOnce({
-      title: 'Deep Work',
-      author: 'Cal Newport',
-      chapter: null,
-      blocks: [{ type: 'thought', text: 'The idea of deep work resonates with how I want to structure my days.', location: null }],
+      title: 'Deep Work', author: 'Cal Newport', chapter: null,
+      blocks: [{ type: 'thought', text: 'Focus matters.', location: null }],
     });
-
-    // Library has a matching book — findMatchingBook will return it
-    const existingBook = {
-      id: 3,
-      title: 'Deep Work',
-      author: 'Cal Newport',
-      coverUrl: null,
-      isbn: null,
-      googleBooksId: null,
-      description: null,
-      pageCount: null,
-      createdAt: '2026-03-15T10:00:00Z',
-      lastSessionAt: '2026-04-01T09:00:00Z',
-    };
-    (getBooksByLastSession as jest.Mock).mockReturnValue([existingBook]);
-
-    // Make findMatchingBook return the existing book for this title
-    const { findMatchingBook } = require('../../services/matchBook');
-    (findMatchingBook as jest.Mock).mockReturnValueOnce(existingBook);
-
-    const onComplete = jest.fn();
-    const { result } = renderHook(() => useRecording(onComplete));
-
-    await act(async () => { await result.current.start(); });
-    await act(async () => { await result.current.stop(); });
-
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-
-    // Should have matched the existing book, not fallen back to getBooksByLastSession()[0]
-    expect(onComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ bookId: existingBook.id })
+    (findMatchingBook as jest.Mock).mockReturnValueOnce(book);
+    const { result, onComplete } = await capture();
+    expect(result.current.state).toBe('done');
+    expect(onComplete).toHaveBeenCalledWith({ bookId: 5, sessionId: 42 });
+    expect(insertReadingSession).toHaveBeenCalledWith(
+      5, expect.objectContaining({ title: 'Deep Work' }), 'Test transcript text.',
     );
     expect(Alert.alert).not.toHaveBeenCalled();
   });
 });
 
-describe('useRecording — pinned book (existing book) flow', () => {
-  const pinnedBook = {
-    id: 5,
-    title: 'Deep Work',
-    author: 'Cal Newport',
-    coverUrl: null,
-    isbn: null,
-    googleBooksId: null,
-    description: null,
-    pageCount: null,
-    createdAt: '2026-01-01T00:00:00Z',
-    lastSessionAt: '2026-01-02T00:00:00Z',
-  };
-
-  it('inserts the session normally when extraction succeeds', async () => {
-    (getBooksByLastSession as jest.Mock).mockReturnValue([pinnedBook]);
-
-    const onComplete = jest.fn();
-    const { result } = renderHook(() => useRecording(onComplete, 5));
-
-    await recordAndStop(result);
-
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ bookId: 5 }));
+describe('useRecording — pinned book', () => {
+  it('saves extracted blocks under the pinned book', async () => {
+    const { onComplete } = await capture({ pinned: 5 });
+    expect(onComplete).toHaveBeenCalledWith({ bookId: 5, sessionId: 42 });
+    expect(extractNoteOnly).toHaveBeenCalledWith('Test transcript text.', 'Deep Work', 'Cal Newport');
+    expect(extractBookInfo).not.toHaveBeenCalled();
     expect(insertReadingSession).toHaveBeenCalledWith(
-      5,
-      expect.objectContaining({ blocks: expect.any(Array) }),
-      expect.anything()
+      5, expect.objectContaining({ blocks: expect.any(Array) }), 'Test transcript text.',
     );
+    expect(Alert.alert).not.toHaveBeenCalled();
   });
 
-  /**
-   * Regression test for the note-corruption crash: a session recorded against
-   * an existing book crashed every time that book was opened, because a
-   * truncated Claude response got JSON.stringify'd and stored anyway, then
-   * failed to JSON.parse back out.
-   *
-   * Now: if extraction fails (even after extract.ts's own internal retry),
-   * the session must still be saved — with a null note — instead of losing
-   * the recording or writing corrupted data. raw_transcript is preserved
-   * either way and can be re-processed later from the BookScreen UI.
-   */
-  it('still saves the session with a null note when extraction fails, instead of losing the recording', async () => {
-    (getBooksByLastSession as jest.Mock).mockReturnValue([pinnedBook]);
-    (extractNoteOnly as jest.Mock).mockRejectedValueOnce(
-      new ExtractError('Claude output was truncated even after retry')
-    );
-
-    const onComplete = jest.fn();
-    const { result } = renderHook(() => useRecording(onComplete, 5));
-
-    await recordAndStop(result);
-
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ bookId: 5 }));
+  it('preserves the transcript with a null note if extraction fails', async () => {
+    (extractNoteOnly as jest.Mock).mockRejectedValueOnce(new ExtractError('Truncated output'));
+    const { onComplete } = await capture({ pinned: 5 });
+    expect(onComplete).toHaveBeenCalledWith({ bookId: 5, sessionId: 42 });
     expect(insertReadingSession).toHaveBeenCalledWith(
-      5,
-      expect.objectContaining({ blocks: null, chapter: null }),
-      expect.anything()
+      5, { chapter: null, blocks: null }, 'Test transcript text.',
     );
-
-    // The recording is preserved, not surfaced as a blocking error to the user
     expect(Alert.alert).not.toHaveBeenCalled();
+  });
+});
+
+describe('useRecording — speech guards', () => {
+  it.each([-60, -40])('rejects metering %s dB before calling Whisper', async metering => {
+    const { result, onComplete } = await capture({ metering });
+    expect(result.current.state).toBe('idle');
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(insertReadingSession).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledWith("Didn't catch anything", 'No speech was detected in that recording.');
+  });
+
+  it('discards recordings shorter than 1.5 seconds before calling Whisper', async () => {
+    const { result } = await capture({ duration: 1499 });
+    expect(result.current.state).toBe('idle');
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(Alert.alert).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty transcript before extraction or saving', async () => {
+    (transcribeAudio as jest.Mock).mockResolvedValueOnce('   ');
+    const { result } = await capture();
+    expect(result.current.state).toBe('idle');
+    expect(extractBookInfo).not.toHaveBeenCalled();
+    expect(insertReadingSession).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledWith("Didn't catch anything", 'No speech was detected in that recording.');
   });
 });

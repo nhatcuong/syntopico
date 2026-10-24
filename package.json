@@ -8,7 +8,8 @@
     "ios": "node node_modules/expo/bin/cli start --ios",
     "web": "node node_modules/expo/bin/cli start --web",
     "test": "jest",
-    "seed": "python3 scripts/seed_dev_db.py"
+    "seed": "python3 scripts/seed_dev_db.py",
+    "typecheck": "tsc --noEmit"
   },
   "jest": {
     "preset": "jest-expo",
@@ -49,7 +50,7 @@
     "@types/react": "^19.2.14",
     "jest": "^29.7.0",
     "jest-expo": "~55.0.0",
-    "typescript": "~5.3.3"
+    "typescript": "~5.9.2"
   },
   "private": true
 }
