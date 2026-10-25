@@ -9,13 +9,26 @@
       "distribution": "internal",
       "env": {
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
+      },
+      "android": {
+        "env": {
+          "APP_VARIANT": "development"
+        }
       }
     },
     "preview": {
       "distribution": "internal",
       "env": {
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
+      },
+      "android": {
+        "buildType": "apk",
+        "autoIncrement": true
       }
+    },
+    "android-preview": {
+      "extends": "preview",
+      "environment": "production"
     },
     "production": {
       "autoIncrement": true,

@@ -1,6 +1,6 @@
 # Android beta plan for Syntopico
 
-Created: 2026-10-16. Status: planning only; no Android port work started.
+Created: 2026-10-16. Status: local milestone 1 runtime gate passed 2026-10-24; voice pipeline and EAS readiness pending.
 
 ## Resume here next session
 
@@ -105,3 +105,96 @@ Ask willing friends to try microphone input, quiet-room silence detection, Bluet
 - Automated test and iOS smoke results:
 - Friend hardware feedback (or explicitly none):
 - Remaining risks / next action:
+
+
+### 2026-10-21 — milestone 1 preparation
+
+- Created `codex/android-port` from `voice-max-duration` at `0d61f66`, retaining the existing working-tree changes (including metadata fallback and backup work). No reset, stash or commit of those changes.
+- Added Android package IDs `com.nnc.syntopico` / `com.nnc.syntopico.dev`, matching the existing iOS naming. These remain provisional until EAS signing/ownership is checked; no signing credentials created.
+- Android development EAS config now explicitly sets `APP_VARIANT=development`; preview explicitly produces an APK and increments the remote Android versionCode. iOS profile behavior is unchanged. EAS provider environment availability is still unverified.
+- Declared the already-installed Expo-compatible `expo-keep-awake` ~55.0.8 directly in package.json and the lockfile.
+- Verification: Expo config introspection succeeded, both resolved package IDs checked, and Android Metro/Hermes export succeeded (1,354 modules, 32 assets). This is JavaScript bundling evidence only, not a native build or emulator test.
+- Manifest introspection includes microphone/audio settings, location, legacy storage (through API 32), overlay and foreground media playback permissions. The audio plugin defaults to background playback; review the merged native manifest before beta. No broad storage permission was added for this port.
+- Baseline before port edits: Jest 33 passed / 5 failed (all five in useRecording); TypeScript fails on the installed compiler's unsupported Expo module setting, legacy VoiceCaptureScreen's missing expo-av/obsolete note field, and identifyBook nullable title handling. These are still open.
+- Tool discovery: no Android Studio in /Applications, no adb/emulator/sdkmanager found in the searched Homebrew/Library locations; standard SDK and JDK locations absent. `/usr/bin/java` is a macOS stub and reports no Java runtime. About 162 GiB free disk. RAM check restricted by sandbox. Broad Library search was stopped after yielding no tools; custom locations remain possible.
+- Milestone 1 has NOT passed. Next: install/discover Android Studio + compatible JDK/SDK, create an ARM64 AVD, verify EAS environment/signing, build/install the dev client and exercise cold start, fonts, SQLite, Home and Book screens. Do not proceed to milestone 2 before that gate passes.
+
+
+### 2026-10-24 — shared test/type-check baseline repaired
+
+- Root cause of all five recording failures: the recorder mock omitted metering, so the silence guard exited before transcription. The old null-title assertions also predated the intentional removal of latest-book guessing (`e9ebf15`); the tests were not updated alongside that change or silence detection (`7a9a44d`).
+- Reworked recording tests to deliver an audible metering sample after start resets detection. Assert current no-book rejection behavior for empty and populated libraries; retain recognized-title routing and pinned-book extraction/failure preservation checks. Added silence/threshold, short-recording and empty-transcript guards.
+- Upgraded TypeScript from 5.3.3 to 5.9.3 (range ~5.9.2), which understands Expo's inherited `module: preserve` setting. Added `npm run typecheck`.
+- Removed the unused VoiceCaptureScreen prototype and its exclusively referenced identifyBook helper. Neither was imported by the active app: App mounts Home/Book and GlobalRecordingUI. This removes the obsolete expo-av dependency reference, flat note field and nullable-title metadata call without changing the active capture pipeline.
+- Verification: all 42 Jest tests pass across five suites; `tsc --noEmit` passes. This is shared-code verification, not Android/iOS microphone verification; milestone 1's emulator gate is still pending.
+
+
+### 2026-10-24 — local Android toolchain configured
+
+- Android Studio Rabbit 1 2026.2.1 installed in `/Applications/Android Studio.app`; its bundled JBR is Java 25. The project's pinned Gradle 9.0 supports Java through 24, so installed Homebrew `openjdk@17` (17.0.20.1) without changing Gradle/Expo versions.
+- Installed official ARM64 command-line tools build 15859902 with SHA-256 verification, SDK platform 36, NDK 27.1.12297006 and CMake 3.22.1; existing Build Tools 36.0.0 and platform-tools 37.0.1 retained.
+- Added SDK/JDK/PATH exports to `~/.zprofile`; fresh login-shell check resolves Java, adb, emulator and sdkmanager. IDE-bundled Java remains unchanged.
+- Generated gitignored native Android project using `APP_VARIANT=development node node_modules/expo/bin/cli prebuild --platform android --no-install`; generated package is `com.nnc.syntopico.dev`. Local SDK path is in gitignored `android/local.properties`.
+- Emulator 37.2.12 boots existing `Medium_Phone_API_37.0` ARM64 AVD, Android 17/API 37. `sys.boot_completed=1`, ADB reports `device`, Hypervisor.Framework acceleration available. Compile/target API stays 36; minimum API is 24 from the installed React Native version catalog.
+- `./gradlew --version` succeeds on JDK 17. Local ARM64 debug APK build started with `APP_VARIANT=development SENTRY_DISABLE_AUTO_UPLOAD=true ./gradlew :app:assembleDebug -PreactNativeArchitectures=arm64-v8a --max-workers=2 --console=plain`.
+- Android Metro uses port 8082 (`APP_VARIANT=development node node_modules/expo/bin/cli start --dev-client --localhost --port 8082`) because another existing session owns 8081. Added `adb reverse tcp:8082 tcp:8082`.
+- This local build is a faster baseline alternative to the plan's EAS development build; it does not establish EAS signing/environment readiness. App installation/cold-start gate is not yet claimed.
+
+
+#### Local baseline result
+
+- Local native build **passed** in 5m 9s (391 executed tasks). ARM64 development APK: `android/app/build/outputs/apk/debug/app-debug.apk`, about 69 MiB, SHA-256 `075d4ad4976a47544d07b1494225a8487f8656fa051166c6cfac2a0c5c687ad3`. It is locally debug-signed; this is not the standalone friends-beta build or an EAS build ID.
+- Installed with `adb install -r`; launched development-client deep link against `http://127.0.0.1:8082`. Metro bundled Android successfully.
+- Verified rendered Home/empty state and custom fonts; inspected emulator SQLite database and confirmed `books` and `reading_sessions` tables exist.
+- Seeded one clearly labelled synthetic book/note (`Android smoke test (sample)`) in the fresh emulator database only. Force-stopped/relaunched; Home rendered the persisted row. Tapped it and verified Book screen renders title, author, chapter and note. Returned using Android Back. No microphone/provider requests were used for this fixture.
+- Local runtime portion of milestone 1 passes: cold start, fonts/assets, SQLite, Home/Book navigation and logcat access. EAS development environment/signing checks remain pending; do not interpret this as EAS distribution readiness.
+- Emulator and Android Metro on port 8082 were left running. Existing Metro 8081 was retained. Fresh terminal sessions read `~/.zprofile`; already-open terminals can run `source ~/.zprofile`.
+- New SDK command-line tools report version 22.0 and work under JDK 17. `sdkmanager` is now a deprecated alias for the vendor's newer Android CLI. The native build also auto-installed Build Tools 35.0.0 for a dependency while app compile/target stays 36.
+- Non-blocking upstream warnings: SDK XML version mismatch, deprecated Android/Gradle APIs, dev-launcher appearance reflection, iOS-only navigation font props ignored on Android, and missing expo-system-ui for explicit system appearance. No app startup fatal error observed; Sentry/source-map production setup remains a later gate.
+- Next action: milestone 2, configure emulator host microphone input and prove actual spoken audio → Whisper → extraction → SQLite → displayed note. UI fixture does not verify recording, metering, transcription, metadata or physical hardware behavior.
+
+
+#### First manual capture — emulator microphone setup
+
+- Owner reported recording starts but ends with "Didn't catch anything". Android `RECORD_AUDIO` permission is granted. App uses this alert for either no metering above -40 dB or an empty Whisper transcript, so the alert alone does not identify the branch.
+- Emulator was started without host audio opt-in. Official emulator docs state host microphone input is disabled by default; virtual mic hardware being present (`hw.audioInput=yes`) does not enable host input.
+- Enabled host input on running AVD with `adb -s emulator-5554 emu avd hostmicon`; emulator returned `OK`. This may also require macOS microphone approval. Host-mic opt-in must be re-enabled after restarting the emulator.
+- Next: owner repeats a spoken recording; if still rejected, inspect metering/file audio and macOS mic access before changing silence thresholds. No application code or silence threshold changed. Live microphone/Whisper gate remains pending.
+
+
+### Android launcher icon mask correction
+
+- The shared 1024px square artwork was being used as an adaptive foreground without Android mask padding, clipping the S. Kept all original image files unchanged, including iOS icon/splash (SHA-256 `d41fa05c225bf3bda68cdc478e35655ff2ced6aa3c564b14b3e509615cb06895`).
+- Added `plugins/withAndroidIconInsets.js`, an Android-only finalized Expo mod that wraps the generated foreground in a 16% inset on each edge for both regular and round adaptive icon resources. The mod runs after native icon generation and is omitted from introspection; durable source survives regeneration of gitignored android/.
+- Changed adaptive background to matching solid `#FCFAF4`; removed references to Expo's placeholder background/monochrome artwork rather than shipping its template themed icon. Custom themed-icon artwork is not provided by this change.
+- Verification: native build passes; updated emulator APK in place, visually confirmed whole S and blue dot in the actual round launcher icon. Repeated prebuild regenerates both wrappers correctly; Expo introspection passes. Existing iOS configuration and images unchanged.
+
+
+### 2026-10-25 — physical Samsung tablet baseline and FAB clearance
+
+- Owner connected SM-X210 (Galaxy Tab A9+), Android 16/API 36, ARM64. Installed development APK in owner profile and connected Metro over USB port 8082. App runtime starts and SQLite initializes; owner reports successful spoken recording on physical hardware.
+- Owner reported Samsung bottom taskbar/navigation bar overlaps the FAB. Observed bottom navigation inset 72 physical px at density 240 (=48dp); GlobalRecordingUI had fixed bottom:30 and ignored Android system insets.
+- GlobalRecordingUI now uses `30 + insets.bottom` on Android through react-native-safe-area-context; iOS retains bottom:30. Verified live on the tablet after Fast Refresh: full button/halo sits above taskbar. `npm run typecheck` and `git diff --check` pass. Other navigation modes/orientations remain part of the broader UI gate.
+
+
+### 2026-10-25 — standalone preview build requested
+
+- Added `android-preview` EAS profile extending the APK preview profile, explicitly selecting the existing production EAS environment (preview environment was empty). Existing production variables provide transcription, extraction, metadata and Sentry configuration; values were not printed or copied to source.
+- Added `.easignore` preserving existing ignore rules and excluding local writing/planning, seed scripts/data and agent instructions. Cloud archive includes current working-tree application fixes, including uncommitted Android/icon/FAB changes; the build's displayed Git commit alone does not describe the full uploaded archive.
+- Tests: 42 passed across five suites; typecheck passed before submission.
+- Submitted EAS internal-distribution build `e38b27f2-7a02-4b5e-987f-7355619840dd`, package `com.nnc.syntopico`, version 1.0.0, remote versionCode 2. Expo generated and manages the Android signing keystore in the Syntopico account. Future updates must reuse this key and package.
+- Build URL: https://expo.dev/accounts/syntopico/projects/bookbuddy/builds/e38b27f2-7a02-4b5e-987f-7355619840dd
+- Standalone package installs beside `com.nnc.syntopico.dev` with a separate local library. No development data is deleted or implicitly migrated.
+- Tester instructions: `docs/android-beta-testing.md`. Build completion and no-Metro verification pending.
+
+
+#### Standalone artifact result
+
+- EAS build **FINISHED** successfully. Exact artifact: https://expo.dev/artifacts/eas/a1-V7aFAQKLkOXdWIncVYYWmec4VVi6aYSfMIA_g7VM.apk
+- Downloaded to gitignored `dist/syntopico-1.0.0-2.apk` (80.5 MiB), SHA-256 `a6aaf7ba379ee40538b6f875c1bc0eeb309944b0972b9610be33d7b3a575bc76`. Verified APK signature; signer SHA-256 `d081246b71671145d627edee00372b893376c36d881b87633805ea41491b70bd`.
+- Manifest: package `com.nnc.syntopico`, versionName 1.0.0, versionCode 2, minimum API 24, target API 36, debuggable=false. APK includes arm64-v8a, armeabi-v7a, x86 and x86_64; `assets/index.android.bundle` and 16 bundled font files present. Confirmed expected provider configuration is embedded without printing values.
+- Installed exact APK on Samsung SM-X210 owner profile and ARM64 emulator, alongside development app. Removed port 8082 reverse forwarding on both devices. Both standalone processes report running main without startup fatal errors. Emulator Home/fonts/FAB visually verified after process restart. Tablet was screen-locked during visual verification; requested owner unlock/open Syntopico (not Dev), unplug USB and confirm a spoken note saves.
+- No claim yet for standalone live-microphone capture, update-over-existing-release persistence or complete beta gate. Development-package notes were preserved; release library is intentionally separate. Broader interruption/back/backup/second-AVD UI checks remain open.
+
+
+- Owner confirmed standalone tablet test: **spoken note saves successfully with USB unplugged**. This verifies the standalone physical microphone → transcription/extraction → displayed saved note path without Metro. Android Metro port 8082 was stopped for the additional emulator cold-start check; existing unrelated Metro 8081 was left intact.

@@ -23,11 +23,10 @@ export default {
       },
     },
     android: {
+      package: IS_DEV ? 'com.nnc.syntopico.dev' : 'com.nnc.syntopico',
       adaptiveIcon: {
-        backgroundColor: '#E6F4FE',
+        backgroundColor: '#FCFAF4',
         foregroundImage: './assets/android-icon-foreground.png',
-        backgroundImage: './assets/android-icon-background.png',
-        monochromeImage: './assets/android-icon-monochrome.png',
       },
       predictiveBackGestureEnabled: false,
     },
@@ -41,6 +40,7 @@ export default {
       'expo-sqlite',
       'expo-asset',
       'expo-font',
+      './plugins/withAndroidIconInsets',
     ],
     experiments: {
       newArchEnabled: true,
